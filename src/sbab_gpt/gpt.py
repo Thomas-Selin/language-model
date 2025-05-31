@@ -4,19 +4,23 @@ from torch.nn import functional as F
 from char_tokenizer import CharTokenizer
 import os
 
-# instantiate tokenizer
+# wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
+with open('data/input/input.txt', 'r', encoding='utf-8') as f:
+    text = f.read()
+
+# Save charset before instantiating tokenizer
+chars = sorted(list(set(text)))
 chars_json_path = os.path.join('data', 'output', 'chars.json')
+CharTokenizer.save_charset(chars, path=chars_json_path)
+
+# instantiate tokenizer
 tokenizer = CharTokenizer(chars_file=chars_json_path)
 vocab_size = len(tokenizer.chars)
-
-
-#instantiate config
-()
 
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
-max_iters = 5
+max_iters = 1
 eval_interval = 50
 learning_rate = 3e-4
 eval_iters = 200
@@ -38,10 +42,6 @@ else:
     device = torch.device("cpu")
 
 torch.manual_seed(1337)
-
-# wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
-with open('data/input/input.txt', 'r', encoding='utf-8') as f:
-    text = f.read()
 
 # Train and test splits
 data = torch.tensor(tokenizer.encode(text), dtype=torch.long)

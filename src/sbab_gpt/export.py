@@ -73,19 +73,8 @@ def export_model_as_safetensors():
           json.dump(generation_config, f, indent=2)
      
      # Copy the model implementation for reference
-     shutil.copy("gpt.py", os.path.join(export_path, "model.py"))
-     
+     shutil.copy("src/sbab_gpt/gpt.py", os.path.join(export_path, "model.py"))
      print(f"Model exported to {export_path} directory with safetensors format")
-     print("To load this model:")
-     print("  from transformers import AutoConfig")
-     print("  from safetensors import safe_open")
-     print("  from model import GPTLanguageModel")
-     print(f"  config = AutoConfig.from_pretrained({export_path})")
-     print("  model = GPTLanguageModel()")
-     print("  # Load safetensors weights")
-     print(f"  with safe_open({export_path}/model.safetensors', framework='pt') as f:")
-     print("      for k in f.keys():")
-     print("          model.state_dict()[k].copy_(f.get_tensor(k))")
 
 if __name__ == "__main__":
      try:
