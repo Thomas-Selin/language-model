@@ -229,8 +229,8 @@ if __name__ == "__main__":
         loss.backward()
         optimizer.step()
 
-    torch.save(model.state_dict(), "model_checkpoint.pt")
-    print("Model saved to model_checkpoint.pt")
+    torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
+    print("Model saved to data/output/model_checkpoint.pt")
 
     # # generate from the model
     # context = torch.zeros((1, 1), dtype=torch.long, device=device)

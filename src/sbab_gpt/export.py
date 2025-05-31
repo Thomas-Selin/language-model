@@ -14,7 +14,7 @@ def export_model_as_safetensors():
      
      # Load the trained model
      model = GPTLanguageModel()
-     model.load_state_dict(torch.load("model_checkpoint.pt"))
+     model.load_state_dict(torch.load("data/output/model_checkpoint.pt"))
      model.eval()
      
      # Convert to safetensors format
