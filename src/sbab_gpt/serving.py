@@ -2,7 +2,7 @@
 from transformers import AutoConfig
 from safetensors import safe_open
 from gpt import GPTLanguageModel  # Your original model implementation
-from gpt import decode
+from char_tokenizer import CharTokenizer
 import torch
 import glob
 import os
@@ -47,14 +47,23 @@ with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
     for k in f.keys():
         model.state_dict()[k].copy_(f.get_tensor(k))
 
+# Load tokenizer
+chars_path = os.path.join(latest_model, 'chars.json')
+tokenizer = CharTokenizer(chars_file=chars_path)
+
 # Move model to the correct device
 model = model.to(device)
 
 # Use model for inference
 model.eval()
 
-# Generate text from the model
-print("Starting text generation...")
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-output = model.generate(context, max_new_tokens=500)
-print(decode(output[0].tolist()))
+def generate_text(prompt, max_new_tokens=200):
+    model.eval()
+    with torch.no_grad():
+        input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
+        output = model.generate(input_ids, max_new_tokens=max_new_tokens)
+        generated = tokenizer.decode(output[0].tolist())
+    return generated
+
+print("\033[34mGenerating example text...\033[0m")
+print(generate_text(" ", max_new_tokens=150))

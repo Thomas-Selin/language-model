@@ -1,4 +1,15 @@
 .DS_Store
 data/output/
-__pycache__
 .pytest_cache
+.vscode/
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv

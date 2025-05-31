@@ -1,6 +1,13 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from char_tokenizer import CharTokenizer
+import os
+
+# instantiate tokenizer
+chars_json_path = os.path.join('data', 'output', 'chars.json')
+tokenizer = CharTokenizer(chars_file=chars_json_path)
+vocab_size = len(tokenizer.chars)
 
 
 #instantiate config
@@ -36,17 +43,8 @@ torch.manual_seed(1337)
 with open('data/input/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
-# here are all the unique characters that occur in this text
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-# create a mapping from characters to integers
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
-
 # Train and test splits
-data = torch.tensor(encode(text), dtype=torch.long)
+data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
 n = int(0.9*len(data)) # first 90% will be train, rest val
 train_data = data[:n]
 val_data = data[n:]
@@ -236,5 +234,5 @@ if __name__ == "__main__":
 
     # # generate from the model
     # context = torch.zeros((1, 1), dtype=torch.long, device=device)
-    # print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
-    # open(data/output/ + 'more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
+    # print(tokenizer.decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+    # open('data/output/more.txt', 'w').write(tokenizer.decode(m.generate(context, max_new_tokens=10000)[0].tolist()))

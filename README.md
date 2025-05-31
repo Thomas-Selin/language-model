@@ -12,6 +12,9 @@ A project building a GPT which was created in the [Neural Networks: Zero To Hero
 
 ## Improvement ideas
 
+- launch-config
+- uv
+- temperature
 - Tensorboard
 - AutoTuner
 - UI
