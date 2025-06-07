@@ -94,7 +94,7 @@ class Head(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         # input of size (batch, time-step, channels)
         # output of size (batch, time-step, head size)
         B,T,C = x.shape
@@ -103,11 +103,13 @@ class Head(nn.Module):
         # compute attention scores ("affinities")
         wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, hs) @ (B, hs, T) -> (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
-        wei = F.softmax(wei, dim=-1) # (B, T, T)
-        wei = self.dropout(wei)
+        attn = F.softmax(wei, dim=-1) # (B, T, T)
+        wei = self.dropout(attn)
         # perform the weighted aggregation of the values
         v = self.value(x) # (B,T,hs)
         out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
+        if return_attention:
+            return out, attn
         return out
 
 class MultiHeadAttention(nn.Module):
@@ -119,10 +121,14 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(head_size * num_heads, n_embd)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.dropout(self.proj(out))
-        return out
+    def forward(self, x, return_attention=False):
+        if return_attention:
+            outs, attns = zip(*(h(x, return_attention=True) for h in self.heads))
+            out = torch.cat(outs, dim=-1)
+            return self.dropout(self.proj(out)), attns
+        else:
+            out = torch.cat([h(x) for h in self.heads], dim=-1)
+            return self.dropout(self.proj(out))
 
 class FeedFoward(nn.Module):
     """ a simple linear layer followed by a non-linearity """
@@ -151,10 +157,16 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
-    def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
-        return x
+    def forward(self, x, return_attention=False):
+        if return_attention:
+            sa_out, attns = self.sa(self.ln1(x), return_attention=True)
+            x = x + sa_out
+            x = x + self.ffwd(self.ln2(x))
+            return x, attns
+        else:
+            x = x + self.sa(self.ln1(x))
+            x = x + self.ffwd(self.ln2(x))
+            return x
 
 class GPTLanguageModel(nn.Module):
 
@@ -178,16 +190,24 @@ class GPTLanguageModel(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, return_attention=False):
         B, T = idx.shape
 
         # idx and targets are both (B,T) tensor of integers
         tok_emb = self.token_embedding_table(idx) # (B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = tok_emb + pos_emb # (B,T,C)
-        x = self.blocks(x) # (B,T,C)
-        x = self.ln_f(x) # (B,T,C)
-        logits = self.lm_head(x) # (B,T,vocab_size)
+        attentions = []
+        if return_attention:
+            for block in self.blocks:
+                x, attn = block(x, return_attention=True)
+                attentions.append(attn)
+            x = self.ln_f(x) # (B,T,C)
+            logits = self.lm_head(x) # (B,T,vocab_size)
+        else:
+            x = self.blocks(x) # (B,T,C)
+            x = self.ln_f(x) # (B,T,C)
+            logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
             loss = None
@@ -197,15 +217,21 @@ class GPTLanguageModel(nn.Module):
             targets = targets.view(B*T)
             loss = F.cross_entropy(logits, targets)
 
+        if return_attention:
+            return logits, loss, attentions
         return logits, loss
 
-    def generate(self, idx, max_new_tokens, temperature=1.0):
+    def generate(self, idx, max_new_tokens, temperature=1.0, return_attention=False):
         # idx is (B, T) array of indices in the current context
+        all_attentions = []
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens
             idx_cond = idx[:, -block_size:]
             # get the predictions
-            logits, loss = self(idx_cond)
+            if return_attention:
+                logits, _, attentions = self(idx_cond, return_attention=True)
+            else:
+                logits, _ = self(idx_cond)
             # focus only on the last time step
             logits = logits[:, -1, :] # becomes (B, C)
             # apply temperature
@@ -216,6 +242,11 @@ class GPTLanguageModel(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
+            if return_attention:
+                # Keep attention for all tokens, not just the last one
+                all_attentions.append([[a.detach().cpu() for a in layer] for layer in attentions])
+        if return_attention:
+            return idx, all_attentions
         return idx
 
 model = GPTLanguageModel()

@@ -1,20 +1,20 @@
-from transformers import AutoConfig
 from safetensors import safe_open
-from gpt import GPTLanguageModel  # Your original model implementation
+from gpt import GPTLanguageModel
 from char_tokenizer import CharTokenizer
 import torch
 import glob
 import os
+import matplotlib.pyplot as plt
+import numpy as np
 
 # Find the latest model file based on timestamp in the filename
 def find_latest_model():
-    # The pattern should be a single argument to glob.glob
-    model_files = glob.glob(os.path.join('data', 'output', 'hf_model_*_*_*'))
+    model_files = glob.glob(os.path.join('data', 'output', 'hf_model_*_*_*_*'))
     
     if not model_files:
         raise FileNotFoundError("No model files found with timestamp pattern in data/output/")
     
-    # Sort files by timestamp components (day, hour, minute)
+    # Sort files by timestamp
     latest_file = max(model_files, key=lambda x: 
         [int(n) for n in os.path.basename(x).replace('hf_model_', '').split('_')])
     
@@ -35,9 +35,6 @@ else:
 # First find the latest model
 latest_model = find_latest_model()
 
-# Load configuration from local path
-config = AutoConfig.from_pretrained(latest_model, local_files_only=True)
-
 # Initialize model
 model = GPTLanguageModel()
 
@@ -56,9 +53,84 @@ model = model.to(device)
 # Use model for inference (disable training mode)
 model.eval()
 
+def visualize_attention(generated_text, all_attentions, step_idx=-1, layer_idx=0, head_idx=0):
+    """
+    Visualize attention patterns using matplotlib.
+    
+    Args:
+        generated_text: The full generated text
+        all_attentions: Attention values from model.generate
+        step_idx: Which generation step to visualize (-1 for last step)
+        layer_idx: Which transformer layer to visualize
+        head_idx: Which attention head to visualize
+    """
+    # Get tokens for labeling
+    tokens = [tokenizer.decode([t]) for t in tokenizer.encode(generated_text)]
+    
+    # Select attention from specified step, layer, and head
+    step_attention = all_attentions[step_idx]
+    layer_attention = step_attention[layer_idx]
+    
+    # Extract the 2D attention matrix, handling different possible shapes
+    attention_tensor = layer_attention[head_idx]
+    if len(attention_tensor.shape) == 3 and attention_tensor.shape[0] == 1:
+        # Handle case where tensor has shape (1, seq_len, seq_len)
+        head_attention = attention_tensor.squeeze(0).numpy()
+    else:
+        # Normal case with shape (seq_len, seq_len)
+        head_attention = attention_tensor.numpy()
+    
+    # Ensure we only use as many tokens as we have in the attention matrix
+    attention_size = head_attention.shape[0]
+    tokens = tokens[:attention_size]
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Plot heatmap
+    im = ax.imshow(head_attention, cmap='viridis')
+    
+    # Add colorbar
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel("Attention weight", rotation=-90, va="bottom")
+    
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(tokens)))
+    ax.set_yticks(np.arange(len(tokens)))
+    ax.set_xticklabels(tokens)
+    ax.set_yticklabels(tokens)
+    
+    # Rotate the tick labels and set alignment
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    
+    # Add title and labels
+    ax.set_title(f"Attention - Layer {layer_idx}, Head {head_idx}")
+    ax.set_xlabel("Attended to")
+    ax.set_ylabel("From token")
+    
+    # Loop over data dimensions and create text annotations for important weights
+    for i in range(head_attention.shape[0]):
+        for j in range(head_attention.shape[1]):
+            if head_attention[i, j] > 0.1:  # Only annotate significant attention weights
+                text = ax.text(j, i, f"{head_attention[i, j]:.2f}",
+                              ha="center", va="center", color="white" if head_attention[i, j] > 0.5 else "black")
+    
+    fig.tight_layout()
+    return fig
+
 def generate_text(prompt, max_new_tokens=200, temperature=1.0):
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-        output = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=temperature)
+        output, all_attentions = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=temperature, return_attention=True)
         generated = tokenizer.decode(output[0].tolist())
+        
+        # Create visualization directory if it doesn't exist
+        os.makedirs('data/output/attention_vis', exist_ok=True)
+        
+        # You could also visualize multiple heads or layers in a loop
+        for layer_idx in range(2):  # Assuming 2 layers
+            fig = visualize_attention(generated, all_attentions, layer_idx=layer_idx)
+            fig.savefig(f'data/output/attention_vis/attention_layer{layer_idx}_head0.png')
+            plt.close(fig)
+        
     return generated

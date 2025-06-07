@@ -9,7 +9,7 @@ from datetime import datetime
 def export_model_as_safetensors():
      # Create export directory structure with timestamp
      current_time = datetime.now()
-     export_path = f"data/output/hf_model_{current_time.day}_{current_time.hour}_{current_time.minute}"
+     export_path = f"data/output/hf_model_{current_time.month}_{current_time.day}_{current_time.hour}_{current_time.minute}"
      os.makedirs(export_path, exist_ok=True)
      
      # Load the trained model
