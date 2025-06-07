@@ -204,20 +204,14 @@ def generate_text(prompt, max_new_tokens=200, temperature=1.0):
         # Create visualization directory if it doesn't exist
         os.makedirs('data/output/attention_vis', exist_ok=True)
         
-        # Create combined attention plot (mean of all layers/heads)
-        combined_fig = visualize_combined_attention(generated, all_attentions, aggregation='mean')
-        combined_fig.savefig(f'data/output/attention_vis/combined_attention_mean.png')
-        plt.close(combined_fig)
+        # Create combined attention plots
+        mean_fig = visualize_combined_attention(generated, all_attentions, aggregation='mean')
+        max_fig = visualize_combined_attention(generated, all_attentions, aggregation='max')
         
-        # You can also create plots with different aggregation methods
-        combined_max = visualize_combined_attention(generated, all_attentions, aggregation='max')
-        combined_max.savefig(f'data/output/attention_vis/combined_attention_max.png')
-        plt.close(combined_max)
-        
-        # Original per-layer visualizations
+        # Create per-layer visualizations
+        layer_figs = []
         for layer_idx in range(2):  # Assuming 2 layers
             fig = visualize_attention(generated, all_attentions, layer_idx=layer_idx)
-            fig.savefig(f'data/output/attention_vis/attention_layer{layer_idx}_head0.png')
-            plt.close(fig)
-        
-    return generated
+            layer_figs.append(fig)
+            
+        return generated, mean_fig, max_fig, layer_figs
