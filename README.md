@@ -10,15 +10,6 @@ This project is based on [nanogpt-lecture](https://github.com/karpathy/nanogpt-l
 ## Original Project: nanogpt-lecture
 A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series.
 
-## Improvement ideas
-
-- launch-config
-- uv
-- temperature
-- Tensorboard
-- AutoTuner
-- UI
-- (finetuning better model)
 
 ### License
 

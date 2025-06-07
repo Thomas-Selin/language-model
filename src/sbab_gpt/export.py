@@ -9,7 +9,7 @@ from datetime import datetime
 def export_model_as_safetensors():
      # Create export directory structure with timestamp
      current_time = datetime.now()
-     export_path =  f"data/output/hf_model_{current_time.day}_{current_time.hour}_{current_time.minute}"
+     export_path = f"data/output/hf_model_{current_time.day}_{current_time.hour}_{current_time.minute}"
      os.makedirs(export_path, exist_ok=True)
      
      # Load the trained model
@@ -17,21 +17,27 @@ def export_model_as_safetensors():
      model.load_state_dict(torch.load("data/output/model_checkpoint.pt"))
      model.eval()
      
+     # Extract model configuration from the model instance
+     n_embd = model.token_embedding_table.weight.shape[1]
+     n_layer = len(model.blocks)
+     # Alternative ways to get n_head
+     n_head = len(model.blocks[0].sa.heads)  # If sa.heads is a ModuleList
+     
      # Convert to safetensors format
      state_dict = model.state_dict()
      save_file(state_dict, os.path.join(export_path, "model.safetensors"))
      print(f"Model saved as safetensors to {os.path.join(export_path, 'model.safetensors')}")
      
-     # Create a config.json file for HF compatibility
+     # Create a config.json file for HF compatibility with extracted values
      config = {
           "architectures": ["GPTLanguageModel"],
           "model_type": "gpt2",
           "vocab_size": vocab_size,
-          "hidden_size": 384,  # n_embd
-          "num_hidden_layers": 6,  # n_layer
-          "num_attention_heads": 6,  # n_head
-          "intermediate_size": 1536,  # 4 * n_embd (feedforward size)
-          "hidden_act": "relu",  # Your model uses ReLU
+          "hidden_size": n_embd,
+          "num_hidden_layers": n_layer,
+          "num_attention_heads": n_head,
+          "intermediate_size": 4 * n_embd,  # Standard size for feedforward layer
+          "hidden_act": "relu",  # You might want to extract this too if variable
           "max_position_embeddings": block_size,
           "initializer_range": 0.02,
           "layer_norm_epsilon": 1e-5,
@@ -77,13 +83,4 @@ def export_model_as_safetensors():
      print(f"Model exported to {export_path} directory with safetensors format")
 
 if __name__ == "__main__":
-     try:
-          import safetensors
-     except ImportError:
-          print("safetensors package not found. Installing...")
-          import subprocess
-          subprocess.check_call(["pip", "install", "safetensors"])
-          print("safetensors installed successfully.")
-
-
-     export_model_as_safetensors()
+       export_model_as_safetensors()

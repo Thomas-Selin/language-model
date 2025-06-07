@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 from char_tokenizer import CharTokenizer
 import os
+from torch.utils.tensorboard import SummaryWriter
+import datetime
 
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('data/input/input.txt', 'r', encoding='utf-8') as f:
@@ -15,13 +17,13 @@ CharTokenizer.save_charset(chars, path=chars_json_path)
 
 # instantiate tokenizer
 tokenizer = CharTokenizer(chars_file=chars_json_path)
-vocab_size = len(tokenizer.chars)
+vocab_size = len(tokenizer.character_set)
 
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
 max_iters = 1
-eval_interval = 50
+eval_interval = 1
 learning_rate = 3e-4
 eval_iters = 200
 n_embd = 384
@@ -40,6 +42,13 @@ elif torch.backends.mps.is_available():
 else:
     print("No GPU available, CPU will be used.")
     device = torch.device("cpu")
+
+# Create TensorBoard writer
+log_dir = os.path.join('data', 'output', 'tensorboard_logs', 
+                       datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+os.makedirs(log_dir, exist_ok=True)
+writer = SummaryWriter(log_dir)
+print(f"TensorBoard logs will be saved to {log_dir}")
 
 torch.manual_seed(1337)
 
@@ -216,11 +225,44 @@ print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 if __name__ == "__main__":
+    # Create a wrapper model for visualization that only returns logits
+    class ModelWrapper(nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+            
+        def forward(self, x):
+            # Only return the first part (logits) from the model output
+            logits, _ = self.model(x)
+            return logits
+    
+    # Add model graph to TensorBoard using the wrapper
+    sample_input = torch.zeros((1, block_size), dtype=torch.long).to(device)
+    vis_model = ModelWrapper(model).to(device)
+    writer.add_graph(vis_model, sample_input)
+    
     for iter in range(max_iters):
         # every once in a while evaluate the loss on train and val sets
         if iter % eval_interval == 0 or iter == max_iters - 1:
             losses = estimate_loss()
             print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+            
+            # Log losses to TensorBoard
+            writer.add_scalar('Loss/train', losses['train'], iter)
+            writer.add_scalar('Loss/val', losses['val'], iter)
+            
+            # Log histograms of model parameters
+            for name, param in model.named_parameters():
+                writer.add_histogram(f'Parameters/{name}', param, iter)
+                if param.grad is not None:
+                    writer.add_histogram(f'Gradients/{name}', param.grad, iter)
+                    
+            # Optional: Generate and log a sample text every few iterations
+            if iter % (eval_interval * 5) == 0 or iter == max_iters - 1:
+                context = torch.zeros((1, 1), dtype=torch.long, device=device)
+                sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100)[0].tolist())
+                writer.add_text('Generated Text', sample_text, iter)
+        
         # sample a batch of data
         xb, yb = get_batch('train')
         # evaluate the loss
@@ -231,8 +273,7 @@ if __name__ == "__main__":
 
     torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
     print("Model saved to data/output/model_checkpoint.pt")
-
-    # # generate from the model
-    # context = torch.zeros((1, 1), dtype=torch.long, device=device)
-    # print(tokenizer.decode(m.generate(context, max_new_tokens=500)[0].tolist()))
-    # open('data/output/more.txt', 'w').write(tokenizer.decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
+    
+    # Close the TensorBoard writer
+    writer.close()
+    print(f"TensorBoard logging complete. View logs with: tensorboard --logdir={log_dir}")

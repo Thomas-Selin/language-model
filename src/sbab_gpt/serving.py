@@ -1,4 +1,3 @@
-# Load the model manually
 from transformers import AutoConfig
 from safetensors import safe_open
 from gpt import GPTLanguageModel  # Your original model implementation
@@ -54,16 +53,12 @@ tokenizer = CharTokenizer(chars_file=chars_path)
 # Move model to the correct device
 model = model.to(device)
 
-# Use model for inference
+# Use model for inference (disable training mode)
 model.eval()
 
 def generate_text(prompt, max_new_tokens=200):
-    model.eval()
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
         output = model.generate(input_ids, max_new_tokens=max_new_tokens)
         generated = tokenizer.decode(output[0].tolist())
     return generated
-
-print("\033[34mGenerating example text...\033[0m")
-print(generate_text(" ", max_new_tokens=150))
