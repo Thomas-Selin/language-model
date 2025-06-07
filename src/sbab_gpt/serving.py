@@ -56,9 +56,9 @@ model = model.to(device)
 # Use model for inference (disable training mode)
 model.eval()
 
-def generate_text(prompt, max_new_tokens=200):
+def generate_text(prompt, max_new_tokens=200, temperature=1.0):
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-        output = model.generate(input_ids, max_new_tokens=max_new_tokens)
+        output = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=temperature)
         generated = tokenizer.decode(output[0].tolist())
     return generated
