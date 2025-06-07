@@ -118,6 +118,83 @@ def visualize_attention(generated_text, all_attentions, step_idx=-1, layer_idx=0
     fig.tight_layout()
     return fig
 
+def visualize_combined_attention(generated_text, all_attentions, step_idx=-1, aggregation='mean'):
+    """
+    Visualize combined attention patterns across all layers and heads.
+    
+    Args:
+        generated_text: The full generated text
+        all_attentions: Attention values from model.generate
+        step_idx: Which generation step to visualize (-1 for last step)
+        aggregation: How to combine attentions ('mean', 'max', or 'sum')
+    """
+    # Get tokens for labeling
+    tokens = [tokenizer.decode([t]) for t in tokenizer.encode(generated_text)]
+    
+    # Select attention from specified step
+    step_attention = all_attentions[step_idx]
+    
+    # Collect all attention matrices
+    all_matrices = []
+    for layer_idx in range(len(step_attention)):
+        for head_idx in range(len(step_attention[layer_idx])):
+            attention_tensor = step_attention[layer_idx][head_idx]
+            if len(attention_tensor.shape) == 3 and attention_tensor.shape[0] == 1:
+                attention_matrix = attention_tensor.squeeze(0).numpy()
+            else:
+                attention_matrix = attention_tensor.numpy()
+            all_matrices.append(attention_matrix)
+    
+    # Combine attention matrices
+    if aggregation == 'mean':
+        combined_attention = np.mean(all_matrices, axis=0)
+    elif aggregation == 'max':
+        combined_attention = np.max(all_matrices, axis=0)
+    elif aggregation == 'sum':
+        combined_attention = np.sum(all_matrices, axis=0)
+    else:
+        raise ValueError(f"Unknown aggregation method: {aggregation}")
+    
+    # Ensure we only use as many tokens as we have in the attention matrix
+    attention_size = combined_attention.shape[0]
+    tokens = tokens[:attention_size]
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Plot heatmap
+    im = ax.imshow(combined_attention, cmap='viridis')
+    
+    # Add colorbar
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel(f"{aggregation.capitalize()} attention weight", rotation=-90, va="bottom")
+    
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(tokens)))
+    ax.set_yticks(np.arange(len(tokens)))
+    ax.set_xticklabels(tokens)
+    ax.set_yticklabels(tokens)
+    
+    # Rotate the tick labels and set alignment
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    
+    # Add title and labels
+    ax.set_title(f"Combined Attention ({aggregation})")
+    ax.set_xlabel("Attended to")
+    ax.set_ylabel("From token")
+    
+    # Highlight important connections
+    threshold = 0.1 if aggregation != 'sum' else 0.3
+    for i in range(combined_attention.shape[0]):
+        for j in range(combined_attention.shape[1]):
+            if combined_attention[i, j] > threshold:
+                text = ax.text(j, i, f"{combined_attention[i, j]:.2f}",
+                              ha="center", va="center", 
+                              color="white" if combined_attention[i, j] > threshold*2 else "black")
+    
+    fig.tight_layout()
+    return fig
+
 def generate_text(prompt, max_new_tokens=200, temperature=1.0):
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
@@ -127,7 +204,17 @@ def generate_text(prompt, max_new_tokens=200, temperature=1.0):
         # Create visualization directory if it doesn't exist
         os.makedirs('data/output/attention_vis', exist_ok=True)
         
-        # You could also visualize multiple heads or layers in a loop
+        # Create combined attention plot (mean of all layers/heads)
+        combined_fig = visualize_combined_attention(generated, all_attentions, aggregation='mean')
+        combined_fig.savefig(f'data/output/attention_vis/combined_attention_mean.png')
+        plt.close(combined_fig)
+        
+        # You can also create plots with different aggregation methods
+        combined_max = visualize_combined_attention(generated, all_attentions, aggregation='max')
+        combined_max.savefig(f'data/output/attention_vis/combined_attention_max.png')
+        plt.close(combined_max)
+        
+        # Original per-layer visualizations
         for layer_idx in range(2):  # Assuming 2 layers
             fig = visualize_attention(generated, all_attentions, layer_idx=layer_idx)
             fig.savefig(f'data/output/attention_vis/attention_layer{layer_idx}_head0.png')
