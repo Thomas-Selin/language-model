@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from char_tokenizer import CharTokenizer
+from word_tokenizer import WordTokenizer
 import os
 from torch.utils.tensorboard import SummaryWriter
 import datetime
@@ -19,11 +20,18 @@ CharTokenizer.save_charset(chars, path=chars_json_path)
 tokenizer = CharTokenizer(chars_file=chars_json_path)
 vocab_size = len(tokenizer.character_set)
 
+# Alternatively, for word-level tokenization:
+vocab = WordTokenizer.build_vocab(text, vocab_size=10000)
+WordTokenizer.save_vocab(vocab, path=os.path.join('data', 'output', 'vocab.json'))
+tokenizer = WordTokenizer(vocab_file=os.path.join('data', 'output', 'vocab.json'))
+vocab_size = len(vocab)
+
+
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
-max_iters = 1
-eval_interval = 1
+max_iters = 400
+eval_interval = 10
 learning_rate = 3e-4
 eval_iters = 200
 n_embd = 384
@@ -230,6 +238,9 @@ class GPTLanguageModel(nn.Module):
             # get the predictions
             if return_attention:
                 logits, _, attentions = self(idx_cond, return_attention=True)
+                # Check logits shape before indexing
+                if len(logits.shape) != 3:
+                    raise ValueError(f"Expected logits to have shape (B, T, C) but got {logits.shape}")
             else:
                 logits, _ = self(idx_cond)
             # focus only on the last time step

@@ -6,6 +6,9 @@ import glob
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+import importlib
+from word_tokenizer import WordTokenizer
+from subword_tokenizer import SubwordTokenizer
 
 # Find the latest model file based on timestamp in the filename
 def find_latest_model():
@@ -32,34 +35,27 @@ else:
     print("No GPU available, using CPU.")
     device = torch.device("cpu")
 
-# First find the latest model
-latest_model = find_latest_model()
+def load_tokenizer(tokenizer_type, model_dir):
+    if tokenizer_type == 'char':
+        chars_path = os.path.join('data/output/', 'chars.json')
+        return CharTokenizer(chars_file=chars_path)
+    elif tokenizer_type == 'word':
+        vocab_path = os.path.join('data/output/', 'vocab.json')
+        return WordTokenizer(vocab_file=vocab_path)
+    elif tokenizer_type == 'subword':
+        spm_path = os.path.join(model_dir, 'spm.model')
+        return SubwordTokenizer(model_file=spm_path)
+    else:
+        raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
 
-# Initialize model
-model = GPTLanguageModel()
-
-# Load safetensors weights
-with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
-    for k in f.keys():
-        model.state_dict()[k].copy_(f.get_tensor(k))
-
-# Load tokenizer
-chars_path = os.path.join(latest_model, 'chars.json')
-tokenizer = CharTokenizer(chars_file=chars_path)
-
-# Move model to the correct device
-model = model.to(device)
-
-# Use model for inference (disable training mode)
-model.eval()
-
-def visualize_attention(generated_text, all_attentions, step_idx=-1, layer_idx=0, head_idx=0):
+def visualize_attention(generated_text, all_attentions, tokenizer, step_idx=-1, layer_idx=0, head_idx=0):
     """
     Visualize attention patterns using matplotlib.
     
     Args:
         generated_text: The full generated text
         all_attentions: Attention values from model.generate
+        tokenizer: Tokenizer object for encoding/decoding
         step_idx: Which generation step to visualize (-1 for last step)
         layer_idx: Which transformer layer to visualize
         head_idx: Which attention head to visualize
@@ -118,13 +114,14 @@ def visualize_attention(generated_text, all_attentions, step_idx=-1, layer_idx=0
     fig.tight_layout()
     return fig
 
-def visualize_combined_attention(generated_text, all_attentions, step_idx=-1, aggregation='mean'):
+def visualize_combined_attention(generated_text, all_attentions, tokenizer, step_idx=-1, aggregation='mean'):
     """
     Visualize combined attention patterns across all layers and heads.
     
     Args:
         generated_text: The full generated text
         all_attentions: Attention values from model.generate
+        tokenizer: Tokenizer object for encoding/decoding
         step_idx: Which generation step to visualize (-1 for last step)
         aggregation: How to combine attentions ('mean', 'max', or 'sum')
     """
@@ -195,23 +192,30 @@ def visualize_combined_attention(generated_text, all_attentions, step_idx=-1, ag
     fig.tight_layout()
     return fig
 
-def generate_text(prompt, max_new_tokens=200, temperature=1.0):
+def generate_text(prompt, max_new_tokens=200, temperature=1.0, tokenizer_type='char'):
+    # Find latest model dir
+    latest_model = find_latest_model()
+    # Load tokenizer
+    tokenizer = load_tokenizer(tokenizer_type, latest_model)
+    # Move model to device and eval mode
+    model = GPTLanguageModel()
+    with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
+        for k in f.keys():
+            model.state_dict()[k].copy_(f.get_tensor(k))
+    model = model.to(device)
+    model.eval()
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
         output, all_attentions = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=temperature, return_attention=True)
         generated = tokenizer.decode(output[0].tolist())
-        
         # Create visualization directory if it doesn't exist
         os.makedirs('data/output/attention_vis', exist_ok=True)
-        
         # Create combined attention plots
-        mean_fig = visualize_combined_attention(generated, all_attentions, aggregation='mean')
-        max_fig = visualize_combined_attention(generated, all_attentions, aggregation='max')
-        
+        mean_fig = visualize_combined_attention(generated, all_attentions, tokenizer, aggregation='mean')
+        max_fig = visualize_combined_attention(generated, all_attentions, tokenizer, aggregation='max')
         # Create per-layer visualizations
         layer_figs = []
         for layer_idx in range(2):  # Assuming 2 layers
-            fig = visualize_attention(generated, all_attentions, layer_idx=layer_idx)
+            fig = visualize_attention(generated, all_attentions, tokenizer, layer_idx=layer_idx)
             layer_figs.append(fig)
-            
         return generated, mean_fig, max_fig, layer_figs
