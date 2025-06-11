@@ -8,7 +8,9 @@ The project is based on [nanogpt-lecture](https://github.com/karpathy/nanogpt-le
 ## How to run
 
 1. Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment
-2. Run the `run_all.sh` file to both create, train, export and serve/inference the model via a web app.
+2. Change venv's python version e.g.: `uv venv --python 3.11.9`. This will activate venv as well similar to `source .venv/bin/activate`
+3. Install dependencies: `uv sync`
+4. Run the `run_all.sh` file to both create, train, export and serve/inference the model via a web app.
 
 ## Original Project: nanogpt-lecture
 A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/nanogpt-lecture) 
