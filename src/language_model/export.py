@@ -65,7 +65,7 @@ def export_model_as_safetensors():
           json.dump(tokenizer_config, f, indent=2)
      
      # Save the tokenizer implementation
-     shutil.copy("src/sbab_gpt/char_tokenizer.py", os.path.join(export_path, "tokenizer.py"))
+     shutil.copy("src/language_model/char_tokenizer.py", os.path.join(export_path, "tokenizer.py"))
      
      # Create generation_config.json
      generation_config = {
@@ -79,7 +79,7 @@ def export_model_as_safetensors():
           json.dump(generation_config, f, indent=2)
      
      # Copy the model implementation for reference
-     shutil.copy("src/sbab_gpt/gpt.py", os.path.join(export_path, "model.py"))
+     shutil.copy("src/language_model/gpt.py", os.path.join(export_path, "model.py"))
      print(f"Model exported to {export_path} directory with safetensors format")
 
 if __name__ == "__main__":

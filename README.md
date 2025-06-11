@@ -1,4 +1,4 @@
-# Sbab-GPT
+# Language model
 
 
 This project builds a language model.

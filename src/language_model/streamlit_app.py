@@ -2,7 +2,7 @@ import streamlit as st
 from serving import generate_text
 import matplotlib.pyplot as plt
 
-st.title('Sbab GPT Testground')
+st.title('Language Model Testground')
 
 user_input = st.text_area('Enter your prompt:', height=100)
 
