@@ -30,7 +30,7 @@ vocab_size = len(vocab)
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
-max_iters = 400
+max_iters = 1
 eval_interval = 10
 learning_rate = 3e-4
 eval_iters = 200
