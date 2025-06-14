@@ -8,7 +8,7 @@ The project is based on [nanogpt-lecture](https://github.com/karpathy/nanogpt-le
 ## How to run
 
 1. Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment
-2. Change venv's python version e.g.: `uv venv --python 3.11.9`. This will activate venv as well similar to `source .venv/bin/activate`
+2. Change venv's python version e.g.: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
 3. Install dependencies: `uv sync`
 4. Run the `run_all.sh` file to both create, train, export and serve/inference the model via a web app.
 
