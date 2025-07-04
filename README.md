@@ -3,7 +3,7 @@
 
 This project builds a language model.
 
-The project is based on [nanogpt-lecture](https://github.com/karpathy/nanogpt-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Portions of the original code have been modified and many additional features has been added.
+The project is based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Portions of the original code have been modified and many additional features has been added.
 
 ## How to run
 
@@ -13,7 +13,7 @@ The project is based on [nanogpt-lecture](https://github.com/karpathy/nanogpt-le
 4. Run the `run_all.sh` file to both create, train, export and serve/inference the model via a web app.
 
 ## Original Project: nanogpt-lecture
-A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/nanogpt-lecture) 
+A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) 
 
 
 ### License

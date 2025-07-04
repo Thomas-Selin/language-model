@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from char_tokenizer import CharTokenizer
 from word_tokenizer import WordTokenizer
 import os
 from torch.utils.tensorboard import SummaryWriter
@@ -10,15 +9,6 @@ import datetime
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('data/input/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
-
-# Save charset before instantiating tokenizer
-chars = sorted(list(set(text)))
-chars_json_path = os.path.join('data', 'output', 'chars.json')
-CharTokenizer.save_charset(chars, path=chars_json_path)
-
-# instantiate tokenizer
-tokenizer = CharTokenizer(chars_file=chars_json_path)
-vocab_size = len(tokenizer.character_set)
 
 # Alternatively, for word-level tokenization:
 vocab = WordTokenizer.build_vocab(text, vocab_size=10000)

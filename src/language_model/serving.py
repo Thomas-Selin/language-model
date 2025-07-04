@@ -1,14 +1,11 @@
 from safetensors import safe_open
 from gpt import GPTLanguageModel
-from char_tokenizer import CharTokenizer
 import torch
 import glob
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-import importlib
 from word_tokenizer import WordTokenizer
-from subword_tokenizer import SubwordTokenizer
 
 # Find the latest model file based on timestamp in the filename
 def find_latest_model():
@@ -36,15 +33,9 @@ else:
     device = torch.device("cpu")
 
 def load_tokenizer(tokenizer_type, model_dir):
-    if tokenizer_type == 'char':
-        chars_path = os.path.join('data/output/', 'chars.json')
-        return CharTokenizer(chars_file=chars_path)
-    elif tokenizer_type == 'word':
+    if tokenizer_type == 'word':
         vocab_path = os.path.join('data/output/', 'vocab.json')
         return WordTokenizer(vocab_file=vocab_path)
-    elif tokenizer_type == 'subword':
-        spm_path = os.path.join(model_dir, 'spm.model')
-        return SubwordTokenizer(model_file=spm_path)
     else:
         raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
 
@@ -192,7 +183,7 @@ def visualize_combined_attention(generated_text, all_attentions, tokenizer, step
     fig.tight_layout()
     return fig
 
-def generate_text(prompt, max_new_tokens=200, temperature=1.0, tokenizer_type='char'):
+def generate_text(prompt, max_new_tokens=200, temperature=1.0, tokenizer_type='word'):
     # Find latest model dir
     latest_model = find_latest_model()
     # Load tokenizer

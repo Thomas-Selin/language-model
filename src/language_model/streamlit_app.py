@@ -9,9 +9,9 @@ user_input = st.text_area('Enter your prompt:', height=100)
 # Tokenizer selection
 # st.subheader('Tokenizer Settings')
 tokenizer_type = st.selectbox(
-    'Choose tokenizer',
-    options=['char', 'word', 'subword'],
-    format_func=lambda x: {'char': 'Character', 'word': 'Word', 'subword': 'Subword'}[x]
+    'Tokenizer',
+    options=['word'],
+    format_func=lambda x: {'word': 'Word'}[x]
 )
 
 max_tokens = st.slider('Max new tokens', 1, 1000, 5)

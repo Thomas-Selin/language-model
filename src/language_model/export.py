@@ -3,7 +3,7 @@ import json
 import torch
 import shutil
 from safetensors.torch import save_file
-from gpt import GPTLanguageModel, block_size, vocab_size, chars
+from gpt import GPTLanguageModel, block_size, vocab_size
 from datetime import datetime
 
 def export_model_as_safetensors():
@@ -50,23 +50,23 @@ def export_model_as_safetensors():
      with open(os.path.join(export_path, "config.json"), "w") as f:
           json.dump(config, f, indent=2)
      
-     # Save character set for tokenizer
-     with open(os.path.join(export_path, "chars.json"), "w") as f:
-          json.dump(chars, f)
+     # Save vocabulary for tokenizer
+     with open(os.path.join(export_path, "vocab.json"), "w") as f:
+          json.dump(vocab, f)
      
      # Create tokenizer files
      tokenizer_config = {
           "model_type": "gpt2",
-          "tokenizer_class": "CharTokenizer",
-          "char_file": "chars.json"
+          "tokenizer_class": "WordTokenizer",
+          "vocab_file": "vocab.json"
      }
      
      with open(os.path.join(export_path, "tokenizer_config.json"), "w") as f:
           json.dump(tokenizer_config, f, indent=2)
      
      # Save the tokenizer implementation
-     shutil.copy("src/language_model/char_tokenizer.py", os.path.join(export_path, "tokenizer.py"))
-     
+     shutil.copy("src/language_model/word_tokenizer.py", os.path.join(export_path, "tokenizer.py"))
+
      # Create generation_config.json
      generation_config = {
           "max_length": 1000,
