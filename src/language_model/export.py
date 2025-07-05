@@ -50,9 +50,13 @@ def export_model_as_safetensors():
      with open(os.path.join(export_path, "config.json"), "w") as f:
           json.dump(config, f, indent=2)
      
+     # Load the vocabulary from the saved file
+     with open(os.path.join('data', 'output', 'vocab.json'), 'r', encoding='utf-8') as f:
+          vocab_data = json.load(f)
+
      # Save vocabulary for tokenizer
      with open(os.path.join(export_path, "vocab.json"), "w") as f:
-          json.dump(vocab, f)
+          json.dump(vocab_data, f)
      
      # Create tokenizer files
      tokenizer_config = {

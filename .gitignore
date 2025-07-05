@@ -2,6 +2,7 @@
 data/output/
 .pytest_cache
 .vscode/
+.local/
 
 # Python-generated files
 __pycache__/
