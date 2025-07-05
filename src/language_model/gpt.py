@@ -38,7 +38,7 @@ print(f"✅ Vocabulary loaded. Size: {vocab_size}. Current time is {datetime.dat
 # hyperparameters
 batch_size = 128 # if torch.cuda.is_available() else 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
-max_epochs = 30
+max_epochs = 300 # how many epochs to train for
 eval_interval = 1
 learning_rate = 3e-4
 eval_iters = 200
@@ -341,11 +341,14 @@ if __name__ == "__main__":
     
     try:
         for iter in range(max_epochs):
+            epoch_start_time = time.time()  # Start timing the epoch
+
             # every once in a while evaluate the loss on train and val sets
             if iter % eval_interval == 0 or iter == max_epochs - 1:
                 losses = estimate_loss()
-                print(f"step {iter}: train loss {losses['train']:.4f}, 📏 val loss {losses['val']:.4f}")
-                
+                print("\033[94m____________________________\033[0m\n")
+                print(f"Step {iter} of max {max_epochs}: train loss {losses['train']:.4f}, 📏 val loss \033[94m{losses['val']:.4f}\033[0m")
+
                 # Early stopping logic
                 if losses['val'] < best_val_loss:
                     best_val_loss = losses['val']
@@ -398,8 +401,10 @@ if __name__ == "__main__":
             optimizer.zero_grad(set_to_none=True)
             train_time = time.time() - train_time
 
+            epoch_duration = time.time() - epoch_start_time  # End timing the epoch
+
             # Print GPU memory usage for each epoch (not just evaluation intervals)
-            print(f"Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s")
+            print(f"Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
             print_gpu_memory_summary()
             
     except KeyboardInterrupt:
