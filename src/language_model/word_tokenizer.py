@@ -13,7 +13,7 @@ class WordTokenizer:
         self.token_index_to_word = {idx: word for idx, word in enumerate(self.vocab)}
 
     @staticmethod
-    def build_vocab(text: str, vocab_size: int = 10000):
+    def build_vocab(text: str, vocab_size: int = 10000, min_frequency: int = 1) -> List[str]:
         # Simple whitespace and punctuation splitting
         words = re.findall(r"\b\w+\b", text.lower())
         freq = {}
@@ -21,7 +21,7 @@ class WordTokenizer:
             freq[word] = freq.get(word, 0) + 1
         # Sort by frequency and take the most common
         sorted_words = sorted(freq.items(), key=lambda x: -x[1])
-        vocab = [w for w, _ in sorted_words[:vocab_size]]
+        vocab = [w for w, count in sorted_words[:vocab_size] if count >= min_frequency]
         return vocab
 
     @staticmethod
@@ -38,3 +38,12 @@ class WordTokenizer:
 
     def decode(self, tokens: List[int]) -> str:
         return ' '.join([self.token_index_to_word[i] for i in tokens if i in self.token_index_to_word])
+        
+    def get_vocab_size(self) -> int:
+        """
+        Returns the size of the vocabulary.
+        
+        Returns:
+            int: The number of tokens in the vocabulary.
+        """
+        return len(self.vocab)
