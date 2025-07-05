@@ -5,29 +5,50 @@ from word_tokenizer import WordTokenizer
 import os
 from torch.utils.tensorboard import SummaryWriter
 import datetime
+import time
+from torch.amp import GradScaler, autocast
 
-# wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
-with open('data/input/input.txt', 'r', encoding='utf-8') as f:
+torch.manual_seed(1337)
+
+print("Loading dataset...")
+with open('data/input/half_of_TinyStories.txt', 'r', encoding='utf-8') as f:
     text = f.read()
+    print("✅ Dataset loaded successfully.")
 
-# Alternatively, for word-level tokenization:
-vocab = WordTokenizer.build_vocab(text, vocab_size=10000)
-WordTokenizer.save_vocab(vocab, path=os.path.join('data', 'output', 'vocab.json'))
-tokenizer = WordTokenizer(vocab_file=os.path.join('data', 'output', 'vocab.json'))
-vocab_size = len(vocab)
+vocab_path = os.path.join('data', 'output', 'vocab.json')
+
+# Only build vocab if it doesn't exist
+if not os.path.exists(vocab_path):
+    print("Building vocabulary...")
+    # Word-level tokenization:
+    vocab = WordTokenizer.build_vocab(text, vocab_size=10000, min_frequency=1)
+    print(f"✅ Vocabulary built successfully. Size: {len(vocab)}")
+    WordTokenizer.save_vocab(vocab, path=vocab_path)
+    # Free memory
+    del vocab
+else:
+    print("Using existing vocabulary...")
+
+# Load tokenizer from saved vocab
+tokenizer = WordTokenizer(vocab_file=vocab_path)
+vocab_size = tokenizer.get_vocab_size()  # Assuming this method exists, otherwise use len(tokenizer.vocab)
+print(f"✅ Vocabulary loaded. Size: {vocab_size}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
 
 
 # hyperparameters
-batch_size = 64 # how many independent sequences will we process in parallel?
+batch_size = 128 # if torch.cuda.is_available() else 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
-max_iters = 1
-eval_interval = 10
+max_epochs = 30
+eval_interval = 1
 learning_rate = 3e-4
 eval_iters = 200
 n_embd = 384
 n_head = 6
 n_layer = 6
 dropout = 0.2
+early_stopping_patience = 5  # Number of epochs to wait for improvement
+best_val_loss = float('inf')
+epochs_without_improvement = 0
 # ------------
 
 # Device selection - prioritize CUDA, then Metal, fall back to CPU
@@ -48,10 +69,21 @@ os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir)
 print(f"TensorBoard logs will be saved to {log_dir}")
 
-torch.manual_seed(1337)
 
 # Train and test splits
-data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
+
+# Process dataset in chunks
+print("Encoding dataset in chunks...")
+chunk_size = 2500000  # Adjust based on your available memory
+tokens = []
+for i in range(0, len(text), chunk_size):
+    chunk = text[i:i+chunk_size]
+    tokens.extend(tokenizer.encode(chunk))
+    print(f"Processed chunk {i // chunk_size + 1}, current time is {datetime.datetime.now().strftime('%H:%M:%S')}")
+data = torch.tensor(tokens, dtype=torch.long, device='cpu')
+del tokens  # Free memory
+print(f"✅ Dataset encoded. Length: {len(data)}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
+
 n = int(0.9*len(data)) # first 90% will be train, rest val
 train_data = data[:n]
 val_data = data[n:]
@@ -176,8 +208,6 @@ class GPTLanguageModel(nn.Module):
         self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd) # final layer norm
         self.lm_head = nn.Linear(n_embd, vocab_size)
-
-        # better init, not covered in the original GPT video, but important, will cover in followup video
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -255,8 +285,42 @@ m = model.to(device)
 # print the number of parameters in the model
 print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 
+# Add this after model is moved to device
+print(f"Model is on device: {next(model.parameters()).device}")
+
 # create a PyTorch optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+# Add with other initializations
+scaler = GradScaler(enabled=torch.cuda.is_available())  # Use mixed precision if CUDA is available
+
+# Add this function after other utility functions
+def get_gpu_memory_info():
+    """Get formatted GPU memory usage information"""
+    if not torch.cuda.is_available():
+        return "GPU memory tracking only available for CUDA"
+    
+    # Get memory usage in GB (1GB = 1024MB = 1024*1024*1024 bytes)
+    allocated = torch.cuda.memory_allocated() / 1024**3
+    reserved = torch.cuda.memory_reserved() / 1024**3
+    max_allocated = torch.cuda.max_memory_allocated() / 1024**3
+    max_reserved = torch.cuda.max_memory_reserved() / 1024**3
+    
+    return (f"GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, "
+            f"Max: {max_allocated:.2f}GB allocated, {max_reserved:.2f}GB reserved")
+
+def print_gpu_memory_summary():
+    if torch.cuda.is_available():
+        # Get memory usage in GB (1GB = 1024MB = 1024*1024*1024 bytes)
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
+        max_reserved = torch.cuda.max_memory_reserved() / 1024**3
+        free = total - reserved
+        print(f"GPU memory summary: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free:.2f}GB free, {total:.2f}GB total, {max_allocated:.2f}GB max allocated, {max_reserved:.2f}GB max reserved")
+    else:
+        print("No CUDA GPU available.")
 
 if __name__ == "__main__":
     # Create a wrapper model for visualization that only returns logits
@@ -275,38 +339,77 @@ if __name__ == "__main__":
     vis_model = ModelWrapper(model).to(device)
     writer.add_graph(vis_model, sample_input)
     
-    for iter in range(max_iters):
-        # every once in a while evaluate the loss on train and val sets
-        if iter % eval_interval == 0 or iter == max_iters - 1:
-            losses = estimate_loss()
-            print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+    try:
+        for iter in range(max_epochs):
+            # every once in a while evaluate the loss on train and val sets
+            if iter % eval_interval == 0 or iter == max_epochs - 1:
+                losses = estimate_loss()
+                print(f"step {iter}: train loss {losses['train']:.4f}, 📏 val loss {losses['val']:.4f}")
+                
+                # Early stopping logic
+                if losses['val'] < best_val_loss:
+                    best_val_loss = losses['val']
+                    epochs_without_improvement = 0
+                    # Optionally save the best model so far
+                    torch.save(model.state_dict(), "data/output/best_model.pt")
+                else:
+                    epochs_without_improvement += 1
+                    print(f"No improvement for {epochs_without_improvement} epoch(s).")
+                    if epochs_without_improvement >= early_stopping_patience:
+                        print(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
+                        break
             
-            # Log losses to TensorBoard
-            writer.add_scalar('Loss/train', losses['train'], iter)
-            writer.add_scalar('Loss/val', losses['val'], iter)
+                # Log losses to TensorBoard
+                writer.add_scalar('Loss/train', losses['train'], iter)
+                writer.add_scalar('Loss/val', losses['val'], iter)
+                
+                # Log memory to TensorBoard
+                if torch.cuda.is_available():
+                    writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, iter)
+                    writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, iter)
+                    writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, iter)
+                
+                # Log histograms of model parameters
+                # Only log histograms occasionally to reduce overhead
+                if iter % (eval_interval * 10) == 0:  # Log much less frequently
+                    for name, param in model.named_parameters():
+                        writer.add_histogram(f'Parameters/{name}', param, iter)
+                        if param.grad is not None:
+                            writer.add_histogram(f'Gradients/{name}', param.grad, iter)
+                        
+                # Optional: Generate and log a sample text every few iterations
+                if iter % (eval_interval * 5) == 0 or iter == max_epochs - 1:
+                    context = torch.zeros((1, 1), dtype=torch.long, device=device)
+                    sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100)[0].tolist())
+                    writer.add_text('Generated Text', sample_text, iter)
             
-            # Log histograms of model parameters
-            for name, param in model.named_parameters():
-                writer.add_histogram(f'Parameters/{name}', param, iter)
-                if param.grad is not None:
-                    writer.add_histogram(f'Gradients/{name}', param.grad, iter)
-                    
-            # Optional: Generate and log a sample text every few iterations
-            if iter % (eval_interval * 5) == 0 or iter == max_iters - 1:
-                context = torch.zeros((1, 1), dtype=torch.long, device=device)
-                sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100)[0].tolist())
-                writer.add_text('Generated Text', sample_text, iter)
-        
-        # sample a batch of data
-        xb, yb = get_batch('train')
-        # evaluate the loss
-        logits, loss = model(xb, yb)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
+            # sample a batch of data
+            data_time = time.time()
+            xb, yb = get_batch('train')
+            data_time = time.time() - data_time
 
-    torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
-    print("Model saved to data/output/model_checkpoint.pt")
+            # Measure forward/backward time
+            train_time = time.time()
+            with autocast(device_type=device.type):  # Uses float16 where appropriate
+                logits, loss = model(xb, yb)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            train_time = time.time() - train_time
+
+            # Print GPU memory usage for each epoch (not just evaluation intervals)
+            print(f"Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s")
+            print_gpu_memory_summary()
+            
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user. Saving model checkpoint...")
+        torch.save(model.state_dict(), "data/output/model_interrupted.pt")
+        print("Model saved to data/output/model_interrupted.pt")
+
+    else:
+        torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
+        print("Model saved to data/output/model_checkpoint.pt")
     
     # Close the TensorBoard writer
     writer.close()
