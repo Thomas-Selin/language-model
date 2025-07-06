@@ -189,7 +189,7 @@ def generate_text(prompt, max_new_tokens=200, temperature=1.0, tokenizer_type='w
     # Load tokenizer
     tokenizer = load_tokenizer(tokenizer_type, latest_model)
     # Move model to device and eval mode
-    model = GPTLanguageModel()
+    model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
     with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
         for k in f.keys():
             model.state_dict()[k].copy_(f.get_tensor(k))

@@ -3,7 +3,7 @@ import json
 import torch
 import shutil
 from safetensors.torch import save_file
-from gpt import GPTLanguageModel, block_size, vocab_size
+from gpt import GPTLanguageModel, block_size
 from datetime import datetime
 
 def export_model_as_safetensors():
@@ -12,8 +12,13 @@ def export_model_as_safetensors():
      export_path = f"data/output/hf_model_{current_time.month}_{current_time.day}_{current_time.hour}_{current_time.minute}"
      os.makedirs(export_path, exist_ok=True)
      
+     # Load vocabulary size from the saved file
+     with open(os.path.join('data', 'output', 'vocab.json'), 'r', encoding='utf-8') as f:
+          vocab_data = json.load(f)
+     vocab_size = len(vocab_data)
+
      # Load the trained model
-     model = GPTLanguageModel()
+     model = GPTLanguageModel(vocab_size=vocab_size)
      model.load_state_dict(torch.load("data/output/model_checkpoint.pt"))
      # model.load_state_dict(torch.load("data/output/model_interrupted.pt"))
      model.eval()
