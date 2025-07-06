@@ -13,14 +13,13 @@ class WordTokenizer:
         with open(vocab_file, 'r') as f:
             self.vocab = json.load(f)
             
-        # Add UNK token if not already in vocab
-        if self.UNK_TOKEN not in self.vocab:
-            self.vocab = [self.UNK_TOKEN] + self.vocab
-            
+        # Use only one dictionary and compute indices on-the-fly
         self.word_to_token_index = {word: idx for idx, word in enumerate(self.vocab)}
-        self.token_index_to_word = {idx: word for idx, word in enumerate(self.vocab)}
         self.unk_idx = self.word_to_token_index.get(self.UNK_TOKEN, 0)
-
+        
+        # Don't store token_index_to_word in memory all the time
+        # Instead, only generate it when decoding
+    
     @staticmethod
     def build_vocab(text: str, vocab_size: int = 10000, min_frequency: int = 1) -> List[str]:
         # Simple whitespace and punctuation splitting
@@ -49,7 +48,8 @@ class WordTokenizer:
         return [self.word_to_token_index.get(w, self.unk_idx) for w in words]
 
     def decode(self, tokens: List[int]) -> str:
-        return ' '.join([self.token_index_to_word.get(i, self.UNK_TOKEN) for i in tokens])
+        # Create mapping on-demand instead of storing permanently
+        return ' '.join([self.vocab[i] if 0 <= i < len(self.vocab) else self.UNK_TOKEN for i in tokens])
         
     def get_vocab_size(self) -> int:
         """
@@ -59,3 +59,4 @@ class WordTokenizer:
             int: The number of tokens in the vocabulary.
         """
         return len(self.vocab)
+        
