@@ -6,11 +6,20 @@ class WordTokenizer:
     """
     Word-level tokenizer for mapping between words and integer tokens.
     """
+    # Special token for unknown words
+    UNK_TOKEN = "<UNK>"
+    
     def __init__(self, vocab_file: str = "vocab.json"):
         with open(vocab_file, 'r') as f:
             self.vocab = json.load(f)
+            
+        # Add UNK token if not already in vocab
+        if self.UNK_TOKEN not in self.vocab:
+            self.vocab = [self.UNK_TOKEN] + self.vocab
+            
         self.word_to_token_index = {word: idx for idx, word in enumerate(self.vocab)}
         self.token_index_to_word = {idx: word for idx, word in enumerate(self.vocab)}
+        self.unk_idx = self.word_to_token_index.get(self.UNK_TOKEN, 0)
 
     @staticmethod
     def build_vocab(text: str, vocab_size: int = 10000, min_frequency: int = 1) -> List[str]:
@@ -21,8 +30,10 @@ class WordTokenizer:
             freq[word] = freq.get(word, 0) + 1
         # Sort by frequency and take the most common
         sorted_words = sorted(freq.items(), key=lambda x: -x[1])
-        vocab = [w for w, count in sorted_words[:vocab_size] if count >= min_frequency]
-        return vocab
+        # Filter by min_frequency and limit to vocab_size-1 (to leave room for UNK)
+        vocab = [w for w, count in sorted_words[:vocab_size-1] if count >= min_frequency]
+        # Add UNK token at the beginning
+        return [WordTokenizer.UNK_TOKEN] + vocab
 
     @staticmethod
     def save_vocab(vocab, path="data/output/vocab.json"):
@@ -34,10 +45,11 @@ class WordTokenizer:
 
     def encode(self, text: str) -> List[int]:
         words = re.findall(r"\b\w+\b", text.lower())
-        return [self.word_to_token_index[w] for w in words if w in self.word_to_token_index]
+        # Use the UNK token index for words not in vocabulary
+        return [self.word_to_token_index.get(w, self.unk_idx) for w in words]
 
     def decode(self, tokens: List[int]) -> str:
-        return ' '.join([self.token_index_to_word[i] for i in tokens if i in self.token_index_to_word])
+        return ' '.join([self.token_index_to_word.get(i, self.UNK_TOKEN) for i in tokens])
         
     def get_vocab_size(self) -> int:
         """
