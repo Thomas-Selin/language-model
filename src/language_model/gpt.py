@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from word_tokenizer import WordTokenizer
+from subword_tokenizer import SubwordTokenizer
 import os
 from torch.utils.tensorboard import SummaryWriter
 import datetime
@@ -12,18 +12,34 @@ torch.manual_seed(1337)
 
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
-block_size = 128 # what is the maximum context length for predictions?
-max_epochs = 300 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
+block_size = 64 # what is the maximum context length for predictions?
+max_epochs = 3000 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
 eval_interval = 5 # how many steps between evaluations?
 learning_rate = 3e-4
-eval_iters = 200
+eval_iters = 100
 n_embd = 384
 n_head = 6
 n_layer = 6
 dropout = 0.2
-early_stopping_patience = 5  # Number of epochs to wait for improvement
-min_word_frequency = 3 # Minimum frequency for words to be included in the vocabulary
-max_vocab_size = 20000 # Maximum vocabulary size
+early_stopping_patience = 20  # Number of epochs to wait for improvement
+min_word_frequency = 8 # Minimum frequency for words to be included in the vocabulary
+max_vocab_size = 5000 # Maximum vocabulary size
+
+print("\033[94mAll hyperparameters set:\033[0m")
+print(f"Batch size: {batch_size}")
+print(f"Block size: {block_size}")
+print(f"Max epochs: {max_epochs}")
+print(f"Eval interval: {eval_interval}")
+print(f"Learning rate: {learning_rate}")
+print(f"Eval iters: {eval_iters}")
+print(f"Embedding dimension: {n_embd}")
+print(f"Number of heads: {n_head}")
+print(f"Number of layers: {n_layer}")
+print(f"Dropout: {dropout}")
+print(f"Early stopping patience: {early_stopping_patience}")
+print(f"Min word frequency: {min_word_frequency}")
+print(f"Max vocab size: {max_vocab_size}")
+print("\033[94m____________________________\033[0m\n")
 
 # Device selection - prioritize CUDA, then Metal, fall back to CPU
 if torch.cuda.is_available():
@@ -131,6 +147,8 @@ class GPTLanguageModel(nn.Module):
         self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd) # final layer norm
         self.lm_head = nn.Linear(n_embd, vocab_size)
+        # Tie weights between token embedding and output projection
+        self.lm_head.weight = self.token_embedding_table.weight
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -223,20 +241,21 @@ def load_and_process_data(file_path, vocab_path):
         text = f.read()
         print("✅ Dataset loaded successfully.")
 
+    # Change the file extension for subword tokenizer
+    tokenizer_path = vocab_path.replace('.json', '_subword.json')
+    
     # Only build vocab if it doesn't exist
-    if not os.path.exists(vocab_path):
-        print("Building vocabulary...")
-        # Word-level tokenization:
-        vocab = WordTokenizer.build_vocab(text, vocab_size=max_vocab_size, min_frequency=min_word_frequency)
-        print(f"✅ Vocabulary built successfully. Size: {len(vocab)}")
-        WordTokenizer.save_vocab(vocab, path=vocab_path)
-        # Free up memory
-        del vocab
+    if not os.path.exists(tokenizer_path):
+        print("Building vocabulary with subword tokenizer...")
+        # Subword tokenization:
+        tokenizer_obj = SubwordTokenizer.build_vocab(text, vocab_size=max_vocab_size)
+        print(f"✅ Vocabulary built successfully. Size: {tokenizer_obj.get_vocab_size()}")
+        SubwordTokenizer.save_vocab(tokenizer_obj, path=tokenizer_path)
     else:
-        print("Using existing vocabulary...")
+        print("Using existing subword vocabulary...")
 
-    # Load tokenizer from saved vocab
-    tokenizer = WordTokenizer(vocab_file=vocab_path)
+    # Load tokenizer from saved file
+    tokenizer = SubwordTokenizer(vocab_file=tokenizer_path)
     vocab_size = tokenizer.get_vocab_size()
     print(f"✅ Vocabulary loaded. Size: {vocab_size}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
     
@@ -274,10 +293,12 @@ def estimate_loss(model, train_data, val_data):
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split, train_data, val_data)
-            logits, loss = model(X, Y)
-            losses[k] = loss.item()
+        # Use mixed precision for evaluation too
+        with autocast(device_type=device.type):
+            for k in range(eval_iters):
+                X, Y = get_batch(split, train_data, val_data)
+                logits, loss = model(X, Y)
+                losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
     return out
@@ -285,6 +306,7 @@ def estimate_loss(model, train_data, val_data):
 if __name__ == "__main__":
     # Data paths
     input_file = 'data/input/half_of_TinyStories.txt'
+    print(f"Input file: {input_file}. Nr of lines in input file: {sum(1 for _ in open(input_file, 'r', encoding='utf-8'))}. Size of input file in MB: {os.path.getsize(input_file) / (1024 * 1024):.2f} MB")
     vocab_path = os.path.join('data', 'output', 'vocab.json')
     
     # Load and process data for training
@@ -335,6 +357,7 @@ if __name__ == "__main__":
                 losses = estimate_loss(model, train_data, val_data)
                 print("\033[94m____________________________\033[0m\n")
                 print(f"Step {iter} of max {max_epochs}: train loss {losses['train']:.4f}, 📏 val loss \033[94m{losses['val']:.4f}\033[0m")
+                print_gpu_memory_summary()
 
                 # Early stopping logic
                 if losses['val'] < best_val_loss:
@@ -370,8 +393,10 @@ if __name__ == "__main__":
                 # Optional: Generate and log a sample text every few iterations
                 if iter % (eval_interval * 5) == 0 or iter == max_epochs - 1:
                     context = torch.zeros((1, 1), dtype=torch.long, device=device)
-                    sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100)[0].tolist())
-                    writer.add_text('Generated Text', sample_text, iter)
+                    sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=1.0)[0].tolist())
+                    writer.add_text('Generated Text 1.0 temp', sample_text, iter)
+                    sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=0.5)[0].tolist())
+                    writer.add_text('Generated Text 0.5 temp', sample_text, iter)
             
             # sample a batch of data
             data_time = time.time()
@@ -393,7 +418,6 @@ if __name__ == "__main__":
             # Print GPU memory usage for each epoch (not just evaluation intervals)
             print(f"Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
             writer.add_scalar('Total/EpochTime', epoch_duration, iter)
-            print_gpu_memory_summary()
             
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving model checkpoint...")
