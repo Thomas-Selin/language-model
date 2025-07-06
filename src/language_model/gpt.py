@@ -7,6 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 import datetime
 import time
 from torch.amp import GradScaler, autocast
+from torch.optim.lr_scheduler import LambdaLR
 
 torch.manual_seed(1337)
 
@@ -17,13 +18,14 @@ max_epochs = 3000 # how many epochs to train for as max, early stoxxpping will s
 eval_interval = 5 # how many steps between evaluations?
 learning_rate = 3e-4
 eval_iters = 100
-n_embd = 384
-n_head = 6
-n_layer = 6
-dropout = 0.2
-early_stopping_patience = 20  # Number of epochs to wait for improvement
-min_word_frequency = 8 # Minimum frequency for words to be included in the vocabulary
-max_vocab_size = 5000 # Maximum vocabulary size
+n_embd = 768
+n_head = 8
+n_layer = 8
+dropout = 0.15
+early_stopping_patience = 25  # Number of epochs to wait for improvement
+max_vocab_size = 7000 # Maximum vocabulary size
+warmup_steps = 1000  # Adjust based on dataset size
+lr_decay = "linear"  # Options: "linear", "cosine", "constant"
 
 print("\033[94mAll hyperparameters set:\033[0m")
 print(f"Batch size: {batch_size}")
@@ -37,7 +39,6 @@ print(f"Number of heads: {n_head}")
 print(f"Number of layers: {n_layer}")
 print(f"Dropout: {dropout}")
 print(f"Early stopping patience: {early_stopping_patience}")
-print(f"Min word frequency: {min_word_frequency}")
 print(f"Max vocab size: {max_vocab_size}")
 print("\033[94m____________________________\033[0m\n")
 
@@ -190,7 +191,7 @@ class GPTLanguageModel(nn.Module):
             return logits, loss, attentions
         return logits, loss
 
-    def generate(self, idx, max_new_tokens, temperature=1.0, return_attention=False):
+    def generate(self, idx, max_new_tokens, temperature=1.0, return_attention=False, eos_token_id=None):
         # idx is (B, T) array of indices in the current context
         all_attentions = []
         for _ in range(max_new_tokens):
@@ -212,11 +213,26 @@ class GPTLanguageModel(nn.Module):
             probs = F.softmax(logits, dim=-1) # (B, C)
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
+            
+            # Check if the generated token is the EOS token
+            if eos_token_id is not None and (idx_next == eos_token_id).any():
+                # Stop generation for sequences that produced EOS
+                for b in range(idx_next.size(0)):
+                    if idx_next[b, 0] == eos_token_id:
+                        # We still append this final token before stopping
+                        idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
+                        if return_attention and attentions:
+                            all_attentions.append([[a.detach().cpu() for a in layer] for layer in attentions])
+                        if return_attention:
+                            return idx, all_attentions
+                        return idx
+        
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
             if return_attention:
                 # Keep attention for all tokens, not just the last one
                 all_attentions.append([[a.detach().cpu() for a in layer] for layer in attentions])
+            
         if return_attention:
             return idx, all_attentions
         return idx
@@ -303,6 +319,23 @@ def estimate_loss(model, train_data, val_data):
     model.train()
     return out
 
+# Define scheduler
+def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
+    def lr_lambda(current_step):
+        # Warmup phase
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        # Decay phase
+        if lr_decay == "linear":
+            return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
+        elif lr_decay == "cosine":
+            progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        else:  # constant
+            return 1.0
+            
+    return LambdaLR(optimizer, lr_lambda)
+
 if __name__ == "__main__":
     # Data paths
     input_file = 'data/input/half_of_TinyStories.txt'
@@ -325,7 +358,12 @@ if __name__ == "__main__":
     print(f"Model is on device: {next(model.parameters()).device}")
     
     # create a PyTorch optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.07)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+    
+    # Calculate total steps (adjust if using early stopping)
+    total_steps = max_epochs * (len(train_data) // batch_size)
+    scheduler = get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps)
+    
     scaler = GradScaler(enabled=torch.cuda.is_available())
     
     # Create a wrapper model for visualization that only returns logits
@@ -397,6 +435,15 @@ if __name__ == "__main__":
                     writer.add_text('Generated Text 1.0 temp', sample_text, iter)
                     sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=0.5)[0].tolist())
                     writer.add_text('Generated Text 0.5 temp', sample_text, iter)
+                    input_ids = torch.tensor([tokenizer.encode("What color is the ball?")], dtype=torch.long, device=device)
+                    sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=0.5)[0].tolist())
+                    writer.add_text('Generated Text: "What color is the ball?" 0.5 temp', sample_text, iter)
+                    input_ids = torch.tensor([tokenizer.encode("What color is the ball?")], dtype=torch.long, device=device)
+                    sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=1.0)[0].tolist())
+                    writer.add_text('Generated Text: "What color is the ball?" 1.0 temp', sample_text, iter)
+                    input_ids = torch.tensor([tokenizer.encode("There was a")], dtype=torch.long, device=device)
+                    sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=0.5)[0].tolist())
+                    writer.add_text('Generated Text: "There was a" 0.5 temp', sample_text, iter)
             
             # sample a batch of data
             data_time = time.time()
@@ -408,16 +455,22 @@ if __name__ == "__main__":
             with autocast(device_type=device.type):  # Uses float16 where appropriate
                 logits, loss = model(xb, yb)
             scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             train_time = time.time() - train_time
+
+            # Step the scheduler
+            scheduler.step()
 
             epoch_duration = time.time() - epoch_start_time  # End timing the epoch
 
             # Print GPU memory usage for each epoch (not just evaluation intervals)
             print(f"Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
             writer.add_scalar('Total/EpochTime', epoch_duration, iter)
+            # Log the learning rate
+            writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], iter)
             
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving model checkpoint...")

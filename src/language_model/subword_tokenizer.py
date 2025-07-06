@@ -10,7 +10,7 @@ def create_bpe_tokenizer(text_files, vocab_size=3000):
     
     trainer = trainers.BpeTrainer(
         vocab_size=vocab_size, 
-        special_tokens=["<UNK>"]
+        special_tokens=["<UNK>", "<|endoftext|>"]
     )
     
     tokenizer.train(text_files, trainer)
@@ -21,11 +21,17 @@ class SubwordTokenizer:
     Subword-level tokenizer for mapping between text and integer tokens.
     """
     UNK_TOKEN = "<UNK>"
+    EOS_TOKEN = "<|endoftext|>"
     
     def __init__(self, vocab_file: str = "vocab.json"):
         """Initialize from a saved tokenizer file"""
         self.tokenizer = Tokenizer.from_file(vocab_file)
         self._vocab_size = self.tokenizer.get_vocab_size()
+        
+        # Get the vocabulary to find the EOS token ID
+        self.vocab = self.tokenizer.get_vocab()
+        # If EOS token exists in vocab, store its ID, otherwise use None
+        self.eos_token_id = self.vocab.get(self.EOS_TOKEN)
     
     @staticmethod
     def build_vocab(text: str, vocab_size: int = 3000, min_frequency: int = 1) -> Tokenizer:
@@ -35,7 +41,7 @@ class SubwordTokenizer:
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write(text)
         
-        # Create and train the tokenizer
+        # Create and train the tokenizer with the EOS token
         tokenizer = create_bpe_tokenizer([temp_file], vocab_size=vocab_size)
         
         # Clean up temp file

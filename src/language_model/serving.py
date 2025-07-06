@@ -188,6 +188,10 @@ def generate_text(prompt, max_new_tokens=200, temperature=1.0, tokenizer_type='w
     latest_model = find_latest_model()
     # Load tokenizer
     tokenizer = load_tokenizer(tokenizer_type, latest_model)
+    
+    # Get the EOS token ID if available
+    eos_token_id = getattr(tokenizer, 'eos_token_id', None)
+    
     # Move model to device and eval mode
     model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
     with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
@@ -197,7 +201,13 @@ def generate_text(prompt, max_new_tokens=200, temperature=1.0, tokenizer_type='w
     model.eval()
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-        output, all_attentions = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=temperature, return_attention=True)
+        output, all_attentions = model.generate(
+            input_ids, 
+            max_new_tokens=max_new_tokens, 
+            temperature=temperature, 
+            return_attention=True,
+            eos_token_id=eos_token_id
+        )
         generated = tokenizer.decode(output[0].tolist())
         # Create visualization directory if it doesn't exist
         os.makedirs('data/output/attention_vis', exist_ok=True)
