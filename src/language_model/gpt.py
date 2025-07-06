@@ -13,7 +13,7 @@ torch.manual_seed(1337)
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 64 # what is the maximum context length for predictions?
-max_epochs = 3000 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
+max_epochs = 3000 # how many epochs to train for as max, early stoxxpping will stop training if no improvement is seen
 eval_interval = 5 # how many steps between evaluations?
 learning_rate = 3e-4
 eval_iters = 100
