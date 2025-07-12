@@ -763,6 +763,18 @@ def print_memory_usage():
     except Exception as e:
         print(f"Error checking memory usage: {e}")
 
+def process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=128):
+    """Process a single-turn question-answer pair dataset for chat alignment from a parquet file."""
+    import pandas as pd
+    qa_df = pd.read_parquet(qa_parquet_path)
+    if not {'question', 'answer'}.issubset(qa_df.columns):
+        raise ValueError("Parquet must contain 'question' and 'answer' columns.")
+    pairs = qa_df[['question', 'answer']].fillna('').astype(str).values.tolist()
+    examples = [f"Question: {q} Answer: {a}" for q, a in pairs]
+    tokenized = [tokenizer.encode(ex[:max_length]) for ex in examples]
+    tensor = torch.tensor([t + [0]*(max_length-len(t)) if len(t)<max_length else t[:max_length] for t in tokenized], dtype=torch.long)
+    return tensor
+
 if __name__ == "__main__":
     # Data paths
     parquet_dir_path = 'data/input/parquet_files_test'  # Directory containing parquet files
@@ -771,3 +783,10 @@ if __name__ == "__main__":
     batch_size_files = 10  # Number of parquet files to process in each batch
     
     train_model_on_batched_data(parquet_dir_path, text_column, vocab_path, batch_size_files)
+
+    # Example: process a QA dataset from a parquet file for chat alignment
+    # Uncomment and set the path to your QA parquet file to use:
+    # tokenizer = SubwordTokenizer(vocab_file=vocab_path.replace('.json', '_subword.json'))
+    # qa_parquet_path = 'data/input/qa_pairs.parquet'
+    # qa_tensor = process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=64)
+    # print('QA tensor shape:', qa_tensor.shape)
