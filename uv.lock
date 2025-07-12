@@ -327,6 +327,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "matplotlib" },
+    { name = "pyarrow" },
     { name = "safetensors" },
     { name = "sentencepiece" },
     { name = "streamlit" },
@@ -340,6 +341,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.3" },
+    { name = "pyarrow", specifier = ">=20.0.0" },
     { name = "safetensors", specifier = ">=0.5.3" },
     { name = "sentencepiece", specifier = ">=0.2.0" },
     { name = "streamlit", specifier = ">=1.45.1" },

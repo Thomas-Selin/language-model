@@ -8,13 +8,16 @@ import datetime
 import time
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
+import pandas as pd
+import pyarrow.parquet as pq
+import math
 
 torch.manual_seed(1337)
 
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 64 # what is the maximum context length for predictions?
-max_epochs = 3000 # how many epochs to train for as max, early stoxxpping will stop training if no improvement is seen
+max_epochs = 3000 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
 eval_interval = 5 # how many steps between evaluations?
 learning_rate = 3e-4
 eval_iters = 100
@@ -250,13 +253,28 @@ def print_gpu_memory_summary():
     else:
         print("No CUDA GPU available.")
 
-def load_and_process_data(file_path, vocab_path):
-    """Load and process text data for training"""
-    print("Loading dataset...")
-    with open(file_path, 'r', encoding='utf-8') as f:
-        text = f.read()
-        print("✅ Dataset loaded successfully.")
-
+def load_and_process_data(text_file_path, parquet_file_path=None, text_column='text', vocab_path='data/output/vocab.json'):
+    """Load and process text data from multiple sources for training"""
+    combined_text = ""
+    
+    # Load text file data
+    if text_file_path and os.path.exists(text_file_path):
+        print(f"Loading text dataset from {text_file_path}...")
+        with open(text_file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+            combined_text += text
+            print(f"✅ Text dataset loaded successfully. Size: {len(text)} characters.")
+    
+    # Load parquet file data
+    if parquet_file_path and os.path.exists(parquet_file_path):
+        parquet_text = load_text_from_parquet(parquet_file_path, text_column)
+        if parquet_text:
+            combined_text += parquet_text
+            print(f"✅ Combined dataset size: {len(combined_text)} characters.")
+    
+    if not combined_text:
+        raise ValueError("No data loaded from any source.")
+    
     # Change the file extension for subword tokenizer
     tokenizer_path = vocab_path.replace('.json', '_subword.json')
     
@@ -264,7 +282,7 @@ def load_and_process_data(file_path, vocab_path):
     if not os.path.exists(tokenizer_path):
         print("Building vocabulary with subword tokenizer...")
         # Subword tokenization:
-        tokenizer_obj = SubwordTokenizer.build_vocab(text, vocab_size=max_vocab_size)
+        tokenizer_obj = SubwordTokenizer.build_vocab(combined_text, vocab_size=max_vocab_size)
         print(f"✅ Vocabulary built successfully. Size: {tokenizer_obj.get_vocab_size()}")
         SubwordTokenizer.save_vocab(tokenizer_obj, path=tokenizer_path)
     else:
@@ -279,12 +297,13 @@ def load_and_process_data(file_path, vocab_path):
     print("Encoding dataset in chunks...")
     chunk_size = 2500000  # Adjust based on your available memory
     tokens = []
-    for i in range(0, len(text), chunk_size):
-        chunk = text[i:i+chunk_size]
+    for i in range(0, len(combined_text), chunk_size):
+        chunk = combined_text[i:i+chunk_size]
         tokens.extend(tokenizer.encode(chunk))
         print(f"Processed chunk {i // chunk_size + 1}")
     data = torch.tensor(tokens, dtype=torch.long, device='cpu')
     del tokens  # Free memory
+    del combined_text  # Free memory
     print(f"✅ Dataset encoded. Length: {len(data)}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
     
     # Split into train and validation sets
@@ -336,14 +355,52 @@ def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
             
     return LambdaLR(optimizer, lr_lambda)
 
+def load_text_from_parquet(parquet_file, text_column='text'):
+    """Load text data from a parquet file"""
+    print(f"Loading parquet dataset from {parquet_file}...")
+    try:
+        # Read the parquet file
+        df = pd.read_parquet(parquet_file)
+        
+        # Check if the text column exists
+        if text_column not in df.columns:
+            available_columns = ', '.join(df.columns)
+            raise ValueError(f"Column '{text_column}' not found in parquet file. Available columns: {available_columns}")
+        
+        # Extract text from the specified column
+        text_data = ' '.join(df[text_column].fillna('').astype(str).tolist())
+        print(f"✅ Parquet dataset loaded successfully. {len(df)} rows processed.")
+        return text_data
+    except Exception as e:
+        print(f"Error loading parquet file: {e}")
+        return ""
+
 if __name__ == "__main__":
     # Data paths
-    input_file = 'data/input/half_of_TinyStories.txt'
-    print(f"Input file: {input_file}. Nr of lines in input file: {sum(1 for _ in open(input_file, 'r', encoding='utf-8'))}. Size of input file in MB: {os.path.getsize(input_file) / (1024 * 1024):.2f} MB")
+    text_file = 'data/input/half_of_TinyStories.txt'
+    parquet_file = 'data/input/tinytexts_train-00000-of-00001.parquet'  # Path to your parquet file
+    text_column = 'text'  # Column in the parquet file that contains the text
     vocab_path = os.path.join('data', 'output', 'vocab.json')
     
+    # Print info about text file
+    if os.path.exists(text_file):
+        print(f"Text file: {text_file}. Nr of lines: {sum(1 for _ in open(text_file, 'r', encoding='utf-8'))}. Size: {os.path.getsize(text_file) / (1024 * 1024):.2f} MB")
+    
+    # Print info about parquet file
+    if os.path.exists(parquet_file):
+        try:
+            parquet_info = pq.read_metadata(parquet_file)
+            print(f"Parquet file: {parquet_file}. Nr of rows: {parquet_info.num_rows}. Size: {os.path.getsize(parquet_file) / (1024 * 1024):.2f} MB")
+        except:
+            print(f"Parquet file: {parquet_file}. Size: {os.path.getsize(parquet_file) / (1024 * 1024):.2f} MB")
+    
     # Load and process data for training
-    train_data, val_data, tokenizer, vocab_size = load_and_process_data(input_file, vocab_path)
+    train_data, val_data, tokenizer, vocab_size = load_and_process_data(
+        text_file_path=text_file,
+        parquet_file_path=parquet_file,
+        text_column=text_column,
+        vocab_path=vocab_path
+    )
     
     # Create TensorBoard writer
     log_dir = os.path.join('data', 'output', 'tensorboard_logs', 
@@ -351,6 +408,35 @@ if __name__ == "__main__":
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
     print(f"TensorBoard logs will be saved to {log_dir}")
+    writer.add_text('Session Information', f"""
+    ## Hyperparameters
+    - Batch size: {batch_size}
+    - Block size: {block_size}
+    - Max epochs: {max_epochs}
+    - Eval interval: {eval_interval}
+    - Learning rate: {learning_rate}
+    - Eval iters: {eval_iters}
+    - Embedding dimension: {n_embd}
+    - Number of heads: {n_head}
+    - Number of layers: {n_layer}
+    - Dropout: {dropout}
+    - Early stopping patience: {early_stopping_patience}
+    - Max vocab size: {max_vocab_size}
+    
+    ## Environment
+    - Device: {device}
+    
+    ## Data
+    - Tokenizer vocab size: {vocab_size}
+    - Tokenizer vocab path: {vocab_path}
+    - Train data size: {len(train_data)} tokens
+    - Validation data size: {len(val_data)} tokens
+    
+    ## Timing
+    - Current time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    """)
+
+    # - Training time: {time.time() - start_time:.2f} seconds
     
     # Initialize model with vocabulary size
     model = GPTLanguageModel(vocab_size).to(device)
@@ -471,6 +557,8 @@ if __name__ == "__main__":
             writer.add_scalar('Total/EpochTime', epoch_duration, iter)
             # Log the learning rate
             writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], iter)
+            if iter % eval_interval == 0:
+                print(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
             
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving model checkpoint...")
