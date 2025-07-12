@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = "==3.11.9"
 dependencies = [
     "matplotlib>=3.10.3",
+    "psutil>=7.0.0",
     "pyarrow>=20.0.0",
     "safetensors>=0.5.3",
     "sentencepiece>=0.2.0",
