@@ -1,6 +1,5 @@
 import streamlit as st
 from serving import generate_text
-import matplotlib.pyplot as plt
 
 st.title('Language Model Testground')
 
@@ -10,8 +9,8 @@ user_input = st.text_area('Enter your prompt:', height=100)
 # st.subheader('Tokenizer Settings')
 tokenizer_type = st.selectbox(
     'Tokenizer',
-    options=['word'],
-    format_func=lambda x: {'word': 'Word'}[x]
+    options=['subword'],
+    format_func=lambda x: {'subword': 'Subword'}[x]
 )
 
 max_tokens = st.slider('Max new tokens', 1, 1000, 5)

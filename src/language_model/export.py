@@ -2,7 +2,7 @@ import os
 import json
 import torch
 import shutil
-from safetensors.torch import save_file
+from safetensors.torch import save_model
 from gpt import GPTLanguageModel, block_size
 from datetime import datetime
 
@@ -13,13 +13,15 @@ def export_model_as_safetensors():
      os.makedirs(export_path, exist_ok=True)
      
      # Load vocabulary size from the saved file
-     with open(os.path.join('data', 'output', 'vocab.json'), 'r', encoding='utf-8') as f:
+     with open(os.path.join('data', 'output', 'vocab_subword.json'), 'r', encoding='utf-8') as f:
           vocab_data = json.load(f)
-     vocab_size = len(vocab_data)
+     vocab_size = len(vocab_data["model"]["vocab"])  # Access the nested vocabulary dictionary
+     print(f"Vocabulary size: {vocab_size}")
 
      # Load the trained model
      model = GPTLanguageModel(vocab_size=vocab_size)
-     model.load_state_dict(torch.load("data/output/model_checkpoint.pt"))
+     # model.load_state_dict(torch.load("data/output/model_checkpoint.pt"))
+     model.load_state_dict(torch.load("data/output/chat_aligned_best_model.pt"))
      # model.load_state_dict(torch.load("data/output/model_interrupted.pt"))
      model.eval()
      
@@ -30,8 +32,7 @@ def export_model_as_safetensors():
      n_head = len(model.blocks[0].sa.heads)  # If sa.heads is a ModuleList
      
      # Convert to safetensors format
-     state_dict = model.state_dict()
-     save_file(state_dict, os.path.join(export_path, "model.safetensors"))
+     save_model(model, os.path.join(export_path, "model.safetensors"))
      print(f"Model saved as safetensors to {os.path.join(export_path, 'model.safetensors')}")
      
      # Create a config.json file for HF compatibility with extracted values
@@ -57,25 +58,25 @@ def export_model_as_safetensors():
           json.dump(config, f, indent=2)
      
      # Load the vocabulary from the saved file
-     with open(os.path.join('data', 'output', 'vocab.json'), 'r', encoding='utf-8') as f:
+     with open(os.path.join('data', 'output', 'vocab_subword.json'), 'r', encoding='utf-8') as f:
           vocab_data = json.load(f)
 
      # Save vocabulary for tokenizer
-     with open(os.path.join(export_path, "vocab.json"), "w") as f:
+     with open(os.path.join(export_path, "vocab_subword.json"), "w") as f:
           json.dump(vocab_data, f)
      
      # Create tokenizer files
      tokenizer_config = {
           "model_type": "gpt2",
-          "tokenizer_class": "WordTokenizer",
-          "vocab_file": "vocab.json"
+          "tokenizer_class": "SubwordTokenizer",
+          "vocab_file": "vocab_subword.json"
      }
      
      with open(os.path.join(export_path, "tokenizer_config.json"), "w") as f:
           json.dump(tokenizer_config, f, indent=2)
      
      # Save the tokenizer implementation
-     shutil.copy("src/language_model/word_tokenizer.py", os.path.join(export_path, "tokenizer.py"))
+     shutil.copy("src/language_model/subword_tokenizer.py", os.path.join(export_path, "tokenizer.py"))
 
      # Create generation_config.json
      generation_config = {

@@ -315,10 +315,10 @@ def load_text_from_parquet(parquet_file, text_column='text'):
         print(f"Error loading parquet file: {e}")
         return ""
 
-def load_and_process_data(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size=10):
+def load_and_process_data(parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', batch_size=10):
     """Load and process text data from multiple parquet files in batches for training"""
     # Change the file extension for subword tokenizer
-    tokenizer_path = vocab_path.replace('.json', '_subword.json')
+    tokenizer_path = vocab_path
     
     # List all parquet files in the directory
     all_parquet_files = [f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet')]
@@ -764,29 +764,108 @@ def print_memory_usage():
         print(f"Error checking memory usage: {e}")
 
 def process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=128):
-    """Process a single-turn question-answer pair dataset for chat alignment from a parquet file."""
+    """Process a single-turn question-answer pair dataset for chat alignment from a parquet file with 'answers' column."""
     import pandas as pd
+    import ast
     qa_df = pd.read_parquet(qa_parquet_path)
-    if not {'question', 'answer'}.issubset(qa_df.columns):
-        raise ValueError("Parquet must contain 'question' and 'answer' columns.")
-    pairs = qa_df[['question', 'answer']].fillna('').astype(str).values.tolist()
+    if not {'question', 'answers'}.issubset(qa_df.columns):
+        raise ValueError("Parquet must contain 'question' and 'answers' columns.")
+    pairs = []
+    for _, row in qa_df.iterrows():
+        question = str(row['question']) if 'question' in row else ''
+        answers_field = row['answers']
+        # Parse answers field (can be dict or stringified dict)
+        if isinstance(answers_field, str):
+            answers_dict = ast.literal_eval(answers_field)
+        else:
+            answers_dict = answers_field
+        answer_text = ''
+        if isinstance(answers_dict, dict) and 'text' in answers_dict and len(answers_dict['text']) > 0:
+            answer_text = str(answers_dict['text'][0])
+        pairs.append((question, answer_text))
     examples = [f"Question: {q} Answer: {a}" for q, a in pairs]
     tokenized = [tokenizer.encode(ex[:max_length]) for ex in examples]
     tensor = torch.tensor([t + [0]*(max_length-len(t)) if len(t)<max_length else t[:max_length] for t in tokenized], dtype=torch.long)
     return tensor
 
+def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_split=0.1):
+    """Fine-tune the pre-trained model on QA chat alignment data with train/val split and verbose printing."""
+    model.train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    scaler = GradScaler(enabled=torch.cuda.is_available())
+    device = next(model.parameters()).device
+    num_samples = qa_tensor.size(0)
+    split_idx = int((1.0 - val_split) * num_samples)
+    train_tensor = qa_tensor[:split_idx]
+    val_tensor = qa_tensor[split_idx:]
+    best_val_loss = float('inf')
+    print(f"Total samples: {num_samples}, Train: {train_tensor.size(0)}, Val: {val_tensor.size(0)}")
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch+1}/{epochs} START")
+        # Training
+        model.train()
+        train_loss = 0.0
+        num_train_batches = (train_tensor.size(0) + batch_size - 1) // batch_size
+        for batch_idx, i in enumerate(range(0, train_tensor.size(0), batch_size)):
+            batch = train_tensor[i:i+batch_size]
+            inputs = batch[:, :-1].to(device)
+            targets = batch[:, 1:].to(device)
+            with autocast(device_type=device.type):
+                logits, loss = model(inputs, targets)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            train_loss += loss.item() * inputs.size(0)
+            print(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
+        avg_train_loss = train_loss / train_tensor.size(0)
+        print(f"Epoch {epoch+1} TRAINING DONE. Avg Train Loss: {avg_train_loss:.4f}")
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        num_val_batches = (val_tensor.size(0) + batch_size - 1) // batch_size
+        with torch.no_grad():
+            for batch_idx, i in enumerate(range(0, val_tensor.size(0), batch_size)):
+                batch = val_tensor[i:i+batch_size]
+                inputs = batch[:, :-1].to(device)
+                targets = batch[:, 1:].to(device)
+                with autocast(device_type=device.type):
+                    logits, loss = model(inputs, targets)
+                val_loss += loss.item() * inputs.size(0)
+                print(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
+        avg_val_loss = val_loss / val_tensor.size(0)
+        print(f"Epoch {epoch+1} VALIDATION DONE. Avg Val Loss: {avg_val_loss:.4f}")
+        # Save best model
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), "data/output/chat_aligned_best_model.pt")
+            print("Best model saved to data/output/chat_aligned_best_model.pt")
+        print(f"Epoch {epoch+1}/{epochs} END\n")
+    # Save final model
+    torch.save(model.state_dict(), "data/output/chat_aligned_model.pt")
+    print("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
+
 if __name__ == "__main__":
     # Data paths
     parquet_dir_path = 'data/input/parquet_files_test'  # Directory containing parquet files
     text_column = 'text'  # Column in the parquet file that contains the text
-    vocab_path = os.path.join('data', 'output', 'vocab.json')
+    vocab_path = os.path.join('data', 'output', 'vocab_subword.json')
     batch_size_files = 10  # Number of parquet files to process in each batch
     
-    train_model_on_batched_data(parquet_dir_path, text_column, vocab_path, batch_size_files)
+    # train_model_on_batched_data(parquet_dir_path, text_column, vocab_path, batch_size_files)
 
     # Example: process a QA dataset from a parquet file for chat alignment
     # Uncomment and set the path to your QA parquet file to use:
-    # tokenizer = SubwordTokenizer(vocab_file=vocab_path.replace('.json', '_subword.json'))
-    # qa_parquet_path = 'data/input/qa_pairs.parquet'
-    # qa_tensor = process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=64)
-    # print('QA tensor shape:', qa_tensor.shape)
+    tokenizer = SubwordTokenizer(vocab_file=vocab_path)
+    qa_parquet_path = 'data/input/chat-align/train-00000-of-00001.parquet'
+    qa_tensor = process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=64)
+    print('QA tensor shape:', qa_tensor.shape)
+    #
+    # # Load pre-trained model
+    vocab_size = tokenizer.get_vocab_size()
+    model = GPTLanguageModel(vocab_size).to(device)
+    model.load_state_dict(torch.load('data/output/model_checkpoint.pt', map_location=device))
+    print('Pre-trained model loaded.')
+    #
+    # # Fine-tune for chat alignment
+    train_chat_alignment(model, qa_tensor, epochs=2, lr=1e-4, batch_size=8, val_split=0.1)
