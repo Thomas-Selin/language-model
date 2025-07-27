@@ -8,24 +8,27 @@ import datetime
 import time
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
-import pandas as pd
-import pyarrow.parquet as pq
 import math
+import gc
+
+from helpers import print_gpu_memory_summary, wait_for_keypress
+from data_handler import load_and_process_data, load_next_batch, get_batch, prepare_context_data_for_training, process_qa_pairs_dataset
 
 torch.manual_seed(1337)
 
 # hyperparameters
-batch_size = 64 # how many independent sequences will we process in parallel?
+batch_size = 32 # how many independent sequences will we process in parallel?
 block_size = 64 # what is the maximum context length for predictions?
-max_epochs = 2 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
+base_training_max_epochs = 100 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
+finetuning_max_epochs = 50  # Number of epochs for chat alignment fine-tuning
 eval_interval = 5 # how many steps between evaluations?
 learning_rate = 3e-4
 eval_iters = 100
-n_embd = 768
-n_head = 8
-n_layer = 8
+n_embd = 384
+n_head = 6
+n_layer = 4
 dropout = 0.15
-early_stopping_patience = 25  # Number of epochs to wait for improvement
+early_stopping_patience = 10  # Number of epochs to wait for improvement
 max_vocab_size = 3000 # Maximum vocabulary size
 warmup_steps = 1000  # Adjust based on dataset size
 lr_decay = "linear"  # Options: "linear", "cosine", "constant"
@@ -33,7 +36,7 @@ lr_decay = "linear"  # Options: "linear", "cosine", "constant"
 print("\033[94mAll hyperparameters set:\033[0m")
 print(f"Batch size: {batch_size}")
 print(f"Block size: {block_size}")
-print(f"Max epochs: {max_epochs}")
+print(f"Max epochs: {base_training_max_epochs}")
 print(f"Eval interval: {eval_interval}")
 print(f"Learning rate: {learning_rate}")
 print(f"Eval iters: {eval_iters}")
@@ -45,7 +48,7 @@ print(f"Early stopping patience: {early_stopping_patience}")
 print(f"Max vocab size: {max_vocab_size}")
 print("\033[94m____________________________\033[0m\n")
 
-# Device selection - prioritize CUDA, then Metal, fall back to CPU
+# Device selection - prioritize CUDA, then Apple Metal, fall back to CPU
 if torch.cuda.is_available():
     print("CUDA GPU will be used.")
     device = torch.device("cuda")
@@ -240,27 +243,6 @@ class GPTLanguageModel(nn.Module):
             return idx, all_attentions
         return idx
 
-def print_gpu_memory_summary():
-    if torch.cuda.is_available():
-        # Get memory usage in GB (1GB = 1024MB = 1024*1024*1024 bytes)
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        reserved = torch.cuda.memory_reserved() / 1024**3
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
-        max_reserved = torch.cuda.max_memory_reserved() / 1024**3
-        free = total - reserved
-        print(f"GPU memory summary: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free:.2f}GB free, {total:.2f}GB total, {max_allocated:.2f}GB max allocated, {max_reserved:.2f}GB max reserved")
-    else:
-        print("No CUDA GPU available.")
-
-def get_batch(data_split, train_data, val_data):
-    # generate a small batch of data of inputs x and targets y
-    data = train_data if data_split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i:i+block_size] for i in ix])
-    y = torch.stack([data[i+1:i+block_size+1] for i in ix])
-    x, y = x.to(device), y.to(device)
-    return x, y
 
 @torch.no_grad()
 def estimate_loss(model, train_data, val_data):
@@ -271,7 +253,7 @@ def estimate_loss(model, train_data, val_data):
         # Use mixed precision for evaluation too
         with autocast(device_type=device.type):
             for k in range(eval_iters):
-                X, Y = get_batch(split, train_data, val_data)
+                X, Y = get_batch(block_size, batch_size, split, train_data, val_data)
                 logits, loss = model(X, Y)
                 losses[k] = loss.item()
         out[split] = losses.mean()
@@ -295,264 +277,26 @@ def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
             
     return LambdaLR(optimizer, lr_lambda)
 
-def load_text_from_parquet(parquet_file, text_column='text'):
-    """Load text data from a parquet file"""
-    print(f"Loading parquet dataset from {parquet_file}...")
-    try:
-        # Read the parquet file
-        df = pd.read_parquet(parquet_file)
-        
-        # Check if the text column exists
-        if text_column not in df.columns:
-            available_columns = ', '.join(df.columns)
-            raise ValueError(f"Column '{text_column}' not found in parquet file. Available columns: {available_columns}")
-        
-        # Extract text from the specified column
-        text_data = ' '.join(df[text_column].fillna('').astype(str).tolist())
-        print(f"✅ Parquet dataset loaded successfully. {len(df)} rows processed.")
-        return text_data
-    except Exception as e:
-        print(f"Error loading parquet file: {e}")
-        return ""
-
-def load_and_process_data(parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', batch_size=10):
-    """Load and process text data from multiple parquet files in batches for training"""
-    # Change the file extension for subword tokenizer
-    tokenizer_path = vocab_path
-    
-    # List all parquet files in the directory
-    all_parquet_files = [f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet')]
-    print(f"Found {len(all_parquet_files)} parquet files in {parquet_dir_path}")
-    
-    # Sort the files to process them in a consistent order
-    all_parquet_files.sort()
-    
-    # Calculate total batches
-    total_batches = len(all_parquet_files) // batch_size
-    if len(all_parquet_files) % batch_size > 0:
-        total_batches += 1
-    
-    print(f"Will process files in {total_batches} batches of up to {batch_size} files each")
-    
-    # Process first batch to build vocabulary if needed
-    first_batch = all_parquet_files[:batch_size]
-    print(f"Processing first batch of {len(first_batch)} files...")
-    
-    # Only build vocab if it doesn't exist
-    if not os.path.exists(tokenizer_path):
-        print("Need to build vocabulary with subword tokenizer...")
-        # Collect text samples for vocab building (use less memory)
-        # We don't need the full text for building vocabulary, just representative samples
-        sample_texts = []
-        sample_size = 1000000  # Limit sample size per file to save memory
-        total_samples = 0
-        
-        for file in first_batch:
-            file_path = os.path.join(parquet_dir_path, file)
-            try:
-                # Read the parquet file but only load what we need for the sample
-                df = pd.read_parquet(file_path)
-                if text_column not in df.columns:
-                    print(f"Warning: Column '{text_column}' not found in {file}")
-                    continue
-                
-                # Take a sample of rows instead of all rows
-                if len(df) > 100:
-                    df_sample = df.sample(min(100, len(df)))
-                else:
-                    df_sample = df
-                
-                texts = df_sample[text_column].fillna('').astype(str).tolist()
-                text_sample = ' '.join(texts)
-                
-                # Limit sample size
-                if len(text_sample) > sample_size:
-                    text_sample = text_sample[:sample_size]
-                
-                sample_texts.append(text_sample)
-                total_samples += len(text_sample)
-                print(f"Added {len(text_sample)} chars from {file} for vocabulary building")
-                
-                # If we have enough samples, stop collecting
-                if total_samples >= 5000000:  # 5MB of text should be enough for vocab
-                    break
-                    
-            except Exception as e:
-                print(f"Error sampling file {file} for vocab: {e}")
-        
-        if not sample_texts:
-            raise ValueError("No data could be loaded from first batch of files for vocabulary building.")
-        
-        # Combine samples
-        combined_samples = ' '.join(sample_texts)
-        print(f"Building vocabulary from {len(combined_samples)} characters of sample text...")
-        
-        # Build vocab
-        tokenizer_obj = SubwordTokenizer.build_vocab(combined_samples, vocab_size=max_vocab_size)
-        print(f"✅ Vocabulary built successfully. Size: {tokenizer_obj.get_vocab_size()}")
-        SubwordTokenizer.save_vocab(tokenizer_obj, path=tokenizer_path)
-        
-        # Free memory
-        del sample_texts
-        del combined_samples
-    else:
-        print("Using existing subword vocabulary...")
-
-    # Load tokenizer from saved file
-    tokenizer = SubwordTokenizer(vocab_file=tokenizer_path)
-    vocab_size = tokenizer.get_vocab_size()
-    print(f"✅ Vocabulary loaded. Size: {vocab_size}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
-    
-    # Process files one by one to save memory
-    print("Processing first batch files one by one...")
-    print_memory_usage()  # Print memory usage before processing
-    
-    chunk_tensors = []
-    for file_idx, file in enumerate(first_batch):
-        file_path = os.path.join(parquet_dir_path, file)
-        print(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
-        
-        try:
-            df = pd.read_parquet(file_path)
-            if text_column not in df.columns:
-                print(f"Warning: Column '{text_column}' not found in {file}, skipping")
-                continue
-            chunk_size_rows = 200  # Process 200 rows at a time
-            for i in range(0, len(df), chunk_size_rows):
-                end_idx = min(i + chunk_size_rows, len(df))
-                chunk_df = df.iloc[i:end_idx]
-                chunk_text = ' '.join(chunk_df[text_column].fillna('').astype(str).tolist())
-                if chunk_text:
-                    chunk_tokens = tokenizer.encode(chunk_text)
-                    chunk_tensor = torch.tensor(chunk_tokens, dtype=torch.long, device='cpu')
-                    chunk_tensors.append(chunk_tensor)
-                del chunk_text
-                del chunk_df
-                if (i // chunk_size_rows) % 10 == 0:
-                    print(f"  Processed {end_idx}/{len(df)} rows from {file}")
-            del df
-            if (file_idx + 1) % 3 == 0:
-                print_memory_usage()
-        except Exception as e:
-            print(f"Error processing file {file}: {e}")
-    if not chunk_tensors:
-        raise ValueError("No tokens could be extracted from the first batch of files.")
-    print("Converting tokens to tensor...")
-    data = torch.cat(chunk_tensors)
-    del chunk_tensors  # Free memory
-    print_memory_usage()  # Print memory usage after tensor conversion
-    
-    print(f"✅ First batch encoded. Length: {len(data)}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
-    
-    # Split into train and validation sets
-    n = int(0.9*len(data))  # first 90% will be train, rest val
-    train_data = data[:n]
-    val_data = data[n:]
-    
-    # Free memory
-    del data
-    print_memory_usage()  # Final memory check
-    
-    # Return the first batch data, the remaining file batches, and tokenizer info
-    remaining_batches = [all_parquet_files[i:i+batch_size] for i in range(batch_size, len(all_parquet_files), batch_size)]
-    
-    return train_data, val_data, tokenizer, vocab_size, remaining_batches
-
-def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train_data, val_data):
-    """Load and process the next batch of parquet files"""
-    print(f"Loading next batch of {len(batch_files)} files...")
-    print_memory_usage()  # Print initial memory usage
-    
-    chunk_tensors = []
-    for file_idx, file in enumerate(batch_files):
-        file_path = os.path.join(parquet_dir_path, file)
-        print(f"Processing file {file_idx+1}/{len(batch_files)}: {file}")
-        try:
-            df = pd.read_parquet(file_path)
-            if text_column not in df.columns:
-                print(f"Warning: Column '{text_column}' not found in {file}, skipping")
-                continue
-            chunk_size_rows = 200  # Process 200 rows at a time
-            for i in range(0, len(df), chunk_size_rows):
-                end_idx = min(i + chunk_size_rows, len(df))
-                chunk_df = df.iloc[i:end_idx]
-                chunk_text = ' '.join(chunk_df[text_column].fillna('').astype(str).tolist())
-                if chunk_text:
-                    chunk_tokens = tokenizer.encode(chunk_text)
-                    chunk_tensor = torch.tensor(chunk_tokens, dtype=torch.long, device='cpu')
-                    chunk_tensors.append(chunk_tensor)
-                del chunk_text
-                del chunk_df
-                if (i // chunk_size_rows) % 10 == 0:
-                    print(f"  Processed {end_idx}/{len(df)} rows from {file}")
-            del df
-            if (file_idx + 1) % 3 == 0:
-                print_memory_usage()
-        except Exception as e:
-            print(f"Error processing file {file}: {e}")
-    if not chunk_tensors:
-        print("Warning: No tokens could be extracted from this batch of files.")
-        return train_data, val_data
-    print("Converting tokens to tensor...")
-    data = torch.cat(chunk_tensors)
-    del chunk_tensors  # Free memory
-    print_memory_usage()  # Check memory after tensor conversion
-    
-    print(f"✅ Batch encoded. Length: {len(data)}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}.")
-    
-    # Split into train and validation sets
-    n = int(0.9*len(data))  # first 90% will be train, rest val
-    new_train_data = data[:n]
-    new_val_data = data[n:]
-    
-    print("Concatenating with existing data...")
-    # Combine with existing data
-    train_data = torch.cat([train_data, new_train_data])
-    val_data = torch.cat([val_data, new_val_data])
-    
-    # Clean up to free memory
-    del data
-    del new_train_data
-    del new_val_data
-    
-    print(f"Combined train data size: {len(train_data)}, val data size: {len(val_data)}")
-    print_memory_usage()  # Final memory check
-    
-    return train_data, val_data
-
-def wait_for_keypress():
-    """Wait for user to press Enter before continuing"""
-    print("\n\033[93m=========================================\033[0m")
-    print("\033[93mBatch processing complete. Time to upload the next batch of files.\033[0m")
-    print("\033[93mPress Enter when you've uploaded the next batch and are ready to continue...\033[0m")
-    print("\033[93m=========================================\033[0m\n")
-    input()  # Wait for Enter key
-    print("Continuing with next batch...")
-
-def train_model_on_batched_data(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size_files=10):
-    """Main function to train model on batched parquet files"""
-    # Create directory if it doesn't exist
-    os.makedirs(parquet_dir_path, exist_ok=True)
-    
-    # Check if there are any parquet files in the directory
-    parquet_files = [f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet')]
+def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size_files=1, training_start_time=None):
+    """Main function to train model on parquet files one at a time, waiting for keypress after all files in folder are processed."""
+    import glob
+    # Get all parquet files in the directory
+    parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
     if not parquet_files:
-        print(f"No parquet files found in {parquet_dir_path}. Please upload some parquet files and run again.")
+        print(f"No parquet files found in {parquet_dir_path}")
         return
-        
-    print(f"Found {len(parquet_files)} parquet files in {parquet_dir_path}")
-    
-    # Load and process data for training (first batch)
-    train_data, val_data, tokenizer, vocab_size, remaining_batches = load_and_process_data(
+
+    # Load tokenizer and vocab size
+    train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
+        vocab_size=max_vocab_size,
         parquet_dir_path=parquet_dir_path,
         text_column=text_column,
         vocab_path=vocab_path,
-        batch_size=batch_size_files
+        batch_size=1
     )
-    
+
     # Create TensorBoard writer
-    log_dir = os.path.join('data', 'output', 'tensorboard_logs', 
-                          datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    log_dir = os.path.join('data', 'output', 'tensorboard_logs', training_start_time)
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
     print(f"TensorBoard logs will be saved to {log_dir}")
@@ -560,7 +304,7 @@ def train_model_on_batched_data(parquet_dir_path, text_column='text', vocab_path
     ## Hyperparameters
     - Batch size: {batch_size}
     - Block size: {block_size}
-    - Max epochs: {max_epochs}
+    - Max epochs: {base_training_max_epochs}
     - Eval interval: {eval_interval}
     - Learning rate: {learning_rate}
     - Eval iters: {eval_iters}
@@ -588,153 +332,142 @@ def train_model_on_batched_data(parquet_dir_path, text_column='text', vocab_path
     model = GPTLanguageModel(vocab_size).to(device)
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
     print(f"Model is on device: {next(model.parameters()).device}")
-    
-    # create a PyTorch optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-    
-    # Calculate total steps (adjust if using early stopping)
-    total_steps = max_epochs * (len(train_data) // batch_size)
+    total_steps = base_training_max_epochs * (len(train_data) // batch_size)
     scheduler = get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps)
-    
     scaler = GradScaler(enabled=torch.cuda.is_available())
-    
-    # Create a wrapper model for visualization that only returns logits
     class ModelWrapper(nn.Module):
         def __init__(self, model):
             super().__init__()
             self.model = model
-            
         def forward(self, x):
-            # Only return the first part (logits) from the model output
             logits, _ = self.model(x)
             return logits
-    
-    # Add model graph to TensorBoard using the wrapper
     sample_input = torch.zeros((1, block_size), dtype=torch.long).to(device)
     vis_model = ModelWrapper(model).to(device)
     writer.add_graph(vis_model, sample_input)
-    
-    # Training loop
+
     best_val_loss = float('inf')
     epochs_without_improvement = 0
     global_iter = 0
     batch_counter = 0
-    
+    total_epochs_run = 0
+    global_max_epochs = base_training_max_epochs
+
     try:
-        # Main training loop with support for batch processing
-        for batch_counter, batch_files in enumerate([None] + remaining_batches):
-            # For each batch (first one is already loaded)
-            if batch_counter > 0:
-                # Load next batch of files
-                wait_for_keypress()  # Wait for user to upload new files
-                train_data, val_data = load_next_batch(
-                    batch_files=batch_files,
-                    parquet_dir_path=parquet_dir_path,
-                    text_column=text_column,
-                    tokenizer=tokenizer,
-                    train_data=train_data,
-                    val_data=val_data
-                )
-                print(f"Batch {batch_counter} loaded. Training will continue.")
-            
-            # Train on the current batch
-            for iter in range(max_epochs):
-                epoch_start_time = time.time()
-    
-                # Evaluation logic
-                if iter % eval_interval == 0 or iter == max_epochs - 1:
-                    losses = estimate_loss(model, train_data, val_data)
-                    print("\033[94m____________________________\033[0m\n")
-                    print(f"Batch {batch_counter}, Step {iter} of max {max_epochs}: train loss {losses['train']:.4f}, 📏 val loss \033[94m{losses['val']:.4f}\033[0m")
-                    print_gpu_memory_summary()
-    
-                    # Early stopping logic
-                    if losses['val'] < best_val_loss:
-                        best_val_loss = losses['val']
-                        epochs_without_improvement = 0
-                        # Optionally save the best model so far
-                        torch.save(model.state_dict(), "data/output/best_model.pt")
-                    else:
-                        epochs_without_improvement += 1
-                        print(f"No improvement for {epochs_without_improvement} epoch(s).")
-                        if epochs_without_improvement >= early_stopping_patience:
-                            print(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
-                            break
-                
-                    # Log losses to TensorBoard
-                    writer.add_scalar('Loss/train', losses['train'], global_iter)
-                    writer.add_scalar('Loss/val', losses['val'], global_iter)
-                    
-                    # Log memory to TensorBoard
-                    if torch.cuda.is_available():
-                        writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
-                        writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
-                        writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
-                    
-                    # Log histograms of model parameters
-                    # Only log histograms occasionally to reduce overhead
-                    if global_iter % (eval_interval * 10) == 0:  # Log much less frequently
-                        for name, param in model.named_parameters():
-                            writer.add_histogram(f'Parameters/{name}', param, global_iter)
-                            if param.grad is not None:
-                                writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
-                            
-                    # Optional: Generate and log a sample text every few iterations
-                    if global_iter % (eval_interval * 5) == 0 or (iter == max_epochs - 1 and batch_counter == len(remaining_batches)):
-                        context = torch.zeros((1, 1), dtype=torch.long, device=device)
-                        sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=1.0)[0].tolist())
-                        writer.add_text('Generated Text 1.0 temp', sample_text, global_iter)
-                        sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=0.5)[0].tolist())
-                        writer.add_text('Generated Text 0.5 temp', sample_text, global_iter)
-                        input_ids = torch.tensor([tokenizer.encode("What color is the ball?")], dtype=torch.long, device=device)
-                        sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=0.5)[0].tolist())
-                        writer.add_text('Generated Text: "What color is the ball?" 0.5 temp', sample_text, global_iter)
-                        input_ids = torch.tensor([tokenizer.encode("What color is the ball?")], dtype=torch.long, device=device)
-                        sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=1.0)[0].tolist())
-                        writer.add_text('Generated Text: "What color is the ball?" 1.0 temp', sample_text, global_iter)
-                        input_ids = torch.tensor([tokenizer.encode("There was a")], dtype=torch.long, device=device)
-                        sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=0.5)[0].tolist())
-                        writer.add_text('Generated Text: "There was a" 0.5 temp', sample_text, global_iter)
-                
-                # sample a batch of data
-                data_time = time.time()
-                xb, yb = get_batch('train', train_data, val_data)
-                data_time = time.time() - data_time
-    
-                # Measure forward/backward time
-                train_time = time.time()
-                with autocast(device_type=device.type):  # Uses float16 where appropriate
-                    logits, loss = model(xb, yb)
-                scaler.scale(loss).backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad(set_to_none=True)
-                train_time = time.time() - train_time
-    
-                # Step the scheduler
-                scheduler.step()
-    
-                epoch_duration = time.time() - epoch_start_time  # End timing the epoch
-    
-                # Print GPU memory usage for each epoch (not just evaluation intervals)
-                print(f"Batch {batch_counter}, Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
-                writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
-                # Log the learning rate
-                writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
-                if iter % eval_interval == 0:
-                    print(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
-                
-                global_iter += 1
-                
-                # Check if we've reached early stopping criteria
-                if epochs_without_improvement >= early_stopping_patience:
-                    print("Early stopping triggered. Moving to next batch if available.")
+        while True:
+            parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+            if not parquet_files:
+                print(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
+                wait_for_keypress()
+                # Check again after keypress
+                parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+                if not parquet_files:
+                    print("No files present after keypress. Base training finished.")
                     break
-            
-            # After processing a batch, reset early stopping counter but keep best_val_loss
-            epochs_without_improvement = 0
-                
+                continue
+            for file_idx, parquet_file in enumerate(parquet_files):
+                print(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}")
+                # Pass directory and file name separately
+                file_dir = os.path.dirname(parquet_file)
+                file_name = os.path.basename(parquet_file)
+                train_data, val_data, _, _, _ = load_and_process_data(
+                    vocab_size=max_vocab_size,
+                    parquet_dir_path=file_dir,  # directory
+                    text_column=text_column,
+                    vocab_path=vocab_path,
+                    batch_size=1,
+                    single_file=file_name  # new argument to specify single file
+                )
+                for iter in range(base_training_max_epochs):
+                    if total_epochs_run >= global_max_epochs:
+                        print(f"Reached global epoch limit of {global_max_epochs}. Stopping training.")
+                        break
+                    if iter % eval_interval == 0 or iter == base_training_max_epochs - 1:
+                        losses = estimate_loss(model, train_data, val_data)
+                        print("\033[94m____________________________\033[0m\n")
+                        print(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, \U0001F4CF val loss \033[94m{losses['val']:.4f}\033[0m")
+                        print_gpu_memory_summary()
+                        if losses['val'] < best_val_loss:
+                            best_val_loss = losses['val']
+                            epochs_without_improvement = 0
+                            torch.save(model.state_dict(), "data/output/best_model.pt")
+                        else:
+                            epochs_without_improvement += 1
+                            print(f"No improvement for {epochs_without_improvement} epoch(s).")
+                            if epochs_without_improvement >= early_stopping_patience:
+                                print(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
+                                # Restore best model weights
+                                print("Restoring best model weights...")
+                                model.load_state_dict(torch.load("data/output/best_model.pt"))
+                                break
+                        writer.add_scalar('Loss/train', losses['train'], global_iter)
+                        writer.add_scalar('Loss/val', losses['val'], global_iter)
+                        if torch.cuda.is_available():
+                            writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
+                            writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
+                            writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
+                        if global_iter % (eval_interval * 10) == 0:
+                            for name, param in model.named_parameters():
+                                writer.add_histogram(f'Parameters/{name}', param, global_iter)
+                                if param.grad is not None:
+                                    writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
+                        if global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1):
+                            context = torch.zeros((1, 1), dtype=torch.long, device=device)
+                            sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=1.0)[0].tolist())
+                            writer.add_text('Generated Text 1.0 temp', sample_text, global_iter)
+                            sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=0.5)[0].tolist())
+                            writer.add_text('Generated Text 0.5 temp', sample_text, global_iter)
+                            input_ids = torch.tensor([tokenizer.encode("What color is the ball?")], dtype=torch.long, device=device)
+                            sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=0.5)[0].tolist())
+                            writer.add_text('Generated Text: "What color is the ball?" 0.5 temp', sample_text, global_iter)
+                            input_ids = torch.tensor([tokenizer.encode("What color is the ball?")], dtype=torch.long, device=device)
+                            sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=1.0)[0].tolist())
+                            writer.add_text('Generated Text: "What color is the ball?" 1.0 temp', sample_text, global_iter)
+                            input_ids = torch.tensor([tokenizer.encode("There was a")], dtype=torch.long, device=device)
+                            sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=0.5)[0].tolist())
+                            writer.add_text('Generated Text: "There was a" 0.5 temp', sample_text, global_iter)
+                    epoch_start_time = time.time()
+                    data_time = time.time()
+                    xb, yb = get_batch(block_size, batch_size, 'train', train_data, val_data)
+                    data_time = time.time() - data_time
+                    train_time = time.time()
+                    with autocast(device_type=device.type):
+                        logits, loss = model(xb, yb)
+                    scaler.scale(loss).backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                    # Add explicit cleanup
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    if global_iter % 10 == 0:
+                        gc.collect()
+                    train_time = time.time() - train_time
+                    scheduler.step()
+                    epoch_duration = time.time() - epoch_start_time
+                    print(f"File {file_idx+1}, Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
+                    writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
+                    writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
+                    if iter % eval_interval == 0:
+                        print(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
+                    global_iter += 1
+                    if epochs_without_improvement >= early_stopping_patience:
+                        print("Early stopping triggered. Moving to next file if available.")
+                        break
+                epochs_without_improvement = 0
+            # After all files in folder processed, wait for keypress
+            print("\n\033[94mAll files in folder processed. Please delete old files and upload new ones, then press Enter to continue, or type 'q' and Enter to finish base training.\033[0m\n")
+            user_input = input()
+            if user_input.strip().lower() == 'q':
+                print("Base training finished by user request.")
+                break
+            # Check again after keypress
+            parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+            if not parquet_files:
+                print("No files present after keypress. Base training finished.")
+                break
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving model checkpoint...")
         torch.save(model.state_dict(), "data/output/model_interrupted.pt")
@@ -742,64 +475,38 @@ def train_model_on_batched_data(parquet_dir_path, text_column='text', vocab_path
     else:
         torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
         print("Model saved to data/output/model_checkpoint.pt")
-    
-    # Close the TensorBoard writer
     writer.close()
     print(f"TensorBoard logging complete. View logs with: tensorboard --logdir={log_dir}")
 
-def print_memory_usage():
-    """Print current memory usage of the Python process as a percentage of system memory"""
-    try:
-        import psutil
-        import os
-        process = psutil.Process(os.getpid())
-        memory_info = process.memory_info()
-        total_mem = psutil.virtual_memory().total
-        rss_percent = memory_info.rss / total_mem * 100
-        vms_percent = memory_info.vms / total_mem * 100
-        print(f"Memory usage: RSS = {memory_info.rss / (1024 * 1024):.2f} MB ({rss_percent:.2f}%), VMS = {memory_info.vms / (1024 * 1024):.2f} MB ({vms_percent:.2f}%) of system memory")
-    except ImportError:
-        print("Could not import psutil. Install with 'pip install psutil' to monitor memory usage.")
-    except Exception as e:
-        print(f"Error checking memory usage: {e}")
-
-def process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=128):
-    """Process a single-turn question-answer pair dataset for chat alignment from a parquet file with 'answers' column."""
-    import pandas as pd
-    import ast
-    qa_df = pd.read_parquet(qa_parquet_path)
-    if not {'question', 'answers'}.issubset(qa_df.columns):
-        raise ValueError("Parquet must contain 'question' and 'answers' columns.")
-    pairs = []
-    for _, row in qa_df.iterrows():
-        question = str(row['question']) if 'question' in row else ''
-        answers_field = row['answers']
-        # Parse answers field (can be dict or stringified dict)
-        if isinstance(answers_field, str):
-            answers_dict = ast.literal_eval(answers_field)
-        else:
-            answers_dict = answers_field
-        answer_text = ''
-        if isinstance(answers_dict, dict) and 'text' in answers_dict and len(answers_dict['text']) > 0:
-            answer_text = str(answers_dict['text'][0])
-        pairs.append((question, answer_text))
-    examples = [f"Question: {q} Answer: {a}" for q, a in pairs]
-    tokenized = [tokenizer.encode(ex[:max_length]) for ex in examples]
-    tensor = torch.tensor([t + [0]*(max_length-len(t)) if len(t)<max_length else t[:max_length] for t in tokenized], dtype=torch.long)
-    return tensor
-
-def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_split=0.1):
+def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_split=0.1, tensorboard_logdir=None):
     """Fine-tune the pre-trained model on QA chat alignment data with train/val split and verbose printing."""
     model.train()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    scaler = GradScaler(enabled=torch.cuda.is_available())
     device = next(model.parameters()).device
+    
+    # 1. Split data first
     num_samples = qa_tensor.size(0)
     split_idx = int((1.0 - val_split) * num_samples)
     train_tensor = qa_tensor[:split_idx]
     val_tensor = qa_tensor[split_idx:]
+    
+    # 2. Calculate total steps
+    total_steps = epochs * ((train_tensor.size(0) + batch_size - 1) // batch_size)
+    
+    # 3. Create optimizer and scheduler
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    scheduler = get_lr_scheduler(optimizer, warmup_steps=100, lr_decay="cosine", total_steps=total_steps)
+    
+    scaler = GradScaler(enabled=torch.cuda.is_available())
+    global_step = 0
     best_val_loss = float('inf')
+    epochs_without_improvement = 0
     print(f"Total samples: {num_samples}, Train: {train_tensor.size(0)}, Val: {val_tensor.size(0)}")
+    # TensorBoard writer
+    writer = None
+    if tensorboard_logdir is not None:
+        from torch.utils.tensorboard import SummaryWriter
+        writer = SummaryWriter(tensorboard_logdir)
+    
     for epoch in range(epochs):
         print(f"\nEpoch {epoch+1}/{epochs} START")
         # Training
@@ -814,10 +521,15 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_
                 logits, loss = model(inputs, targets)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
+            scheduler.step()
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * inputs.size(0)
-            print(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
+            if writer:
+                writer.add_scalar('Loss/train', loss.item(), global_step)
+            global_step += 1
+            if batch_idx % 1000 == 0:
+                print(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
         avg_train_loss = train_loss / train_tensor.size(0)
         print(f"Epoch {epoch+1} TRAINING DONE. Avg Train Loss: {avg_train_loss:.4f}")
         # Validation
@@ -832,40 +544,86 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_
                 with autocast(device_type=device.type):
                     logits, loss = model(inputs, targets)
                 val_loss += loss.item() * inputs.size(0)
-                print(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
+                if writer:
+                    writer.add_scalar('Loss/val', loss.item(), global_step)
+                global_step += 1
+                if batch_idx % 250 == 0:
+                    print(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
         avg_val_loss = val_loss / val_tensor.size(0)
         print(f"Epoch {epoch+1} VALIDATION DONE. Avg Val Loss: {avg_val_loss:.4f}")
-        # Save best model
+        # Save best model and implement early stopping
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), "data/output/chat_aligned_best_model.pt")
             print("Best model saved to data/output/chat_aligned_best_model.pt")
-        print(f"Epoch {epoch+1}/{epochs} END\n")
+        else:
+            epochs_without_improvement += 1
+            print(f"No improvement for {epochs_without_improvement} epoch(s).")
+            if epochs_without_improvement >= early_stopping_patience:
+                print(f"Early stopping triggered at epoch {epoch+1}. Best val loss: {best_val_loss:.4f}")
+                # Restore best model weights
+                print("Restoring best model weights...")
+                model.load_state_dict(torch.load("data/output/chat_aligned_best_model.pt"))
+                break
     # Save final model
     torch.save(model.state_dict(), "data/output/chat_aligned_model.pt")
     print("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
+    if writer:
+        writer.close()
+        print(f"TensorBoard logging complete. View logs with: tensorboard --logdir={tensorboard_logdir}")
+
 
 if __name__ == "__main__":
     # Data paths
-    parquet_dir_path = 'data/input/parquet_files_test'  # Directory containing parquet files
+    parquet_dir_path = 'data/input/parquet_files'  # Directory containing parquet files
     text_column = 'text'  # Column in the parquet file that contains the text
     vocab_path = os.path.join('data', 'output', 'vocab_subword.json')
-    batch_size_files = 10  # Number of parquet files to process in each batch
+    batch_size_files = 1  # Number of parquet files to process in each batch
     
-    # train_model_on_batched_data(parquet_dir_path, text_column, vocab_path, batch_size_files)
-
-    # Example: process a QA dataset from a parquet file for chat alignment
-    # Uncomment and set the path to your QA parquet file to use:
-    tokenizer = SubwordTokenizer(vocab_file=vocab_path)
+    # Get QA dataset path
     qa_parquet_path = 'data/input/chat-align/train-00000-of-00001.parquet'
-    qa_tensor = process_qa_pairs_dataset(qa_parquet_path, tokenizer, max_length=64)
-    print('QA tensor shape:', qa_tensor.shape)
-    #
-    # # Load pre-trained model
+    
+    # Extract context data for base training
+    print("\n=== Extracting context data from QA dataset for base training ===")
+    # context_parquet_path = os.path.join(parquet_dir_path, 'context_data.parquet')
+    context_parquet_path = os.path.join('data/input/', 'context_data.parquet')
+    prepare_context_data_for_training(qa_parquet_path, context_parquet_path, text_column=text_column)
+    print(f"Context data extracted to {context_parquet_path}")
+    print("This file should be included in base training at the end by moving it to the parquet_files directory.")
+
+    # # Get current time for logging
+    training_start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    # Base training - will now include the context data file
+    base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time)
+
+    # Now process QA dataset for fine-tuning
+    tokenizer = SubwordTokenizer(vocab_file=vocab_path)
+    print("\n=== Creating QA dataset for fine-tuning ===")
+    qa_tensor = process_qa_pairs_dataset(
+        qa_parquet_path, 
+        tokenizer,
+        max_length=block_size
+    )
+    print(f'QA tensor shape: {qa_tensor.shape}')
+    
+    # Load pre-trained model
     vocab_size = tokenizer.get_vocab_size()
     model = GPTLanguageModel(vocab_size).to(device)
     model.load_state_dict(torch.load('data/output/model_checkpoint.pt', map_location=device))
     print('Pre-trained model loaded.')
-    #
-    # # Fine-tune for chat alignment
-    train_chat_alignment(model, qa_tensor, epochs=2, lr=1e-4, batch_size=8, val_split=0.1)
+    
+    # Fine-tune on QA pairs
+    print("\n=== Starting fine-tuning on QA pairs ===")
+    qa_logdir = f'data/output/tensorboard_logs/{training_start_time}'
+    train_chat_alignment(
+        model, 
+        qa_tensor, 
+        epochs=finetuning_max_epochs, 
+        lr=1e-4, 
+        batch_size=4, 
+        val_split=0.1, 
+        tensorboard_logdir=qa_logdir
+    )
+    print("Fine-tuning complete. Model ready for use.")
