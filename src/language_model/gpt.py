@@ -12,7 +12,7 @@ import math
 import gc
 
 from helpers import print_gpu_memory_summary, wait_for_keypress
-from data_handler import load_and_process_data, load_next_batch, get_batch, prepare_context_data_for_training, process_qa_pairs_dataset
+from data_handler import load_and_process_data, get_batch, prepare_context_data_for_training, process_qa_pairs_dataset
 
 torch.manual_seed(1337)
 
@@ -28,7 +28,7 @@ n_embd = 384
 n_head = 6
 n_layer = 4
 dropout = 0.15
-early_stopping_patience = 10  # Number of epochs to wait for improvement
+early_stopping_patience = 75  # Number of epochs to wait for improvement
 max_vocab_size = 3000 # Maximum vocabulary size
 warmup_steps = 1000  # Adjust based on dataset size
 lr_decay = "linear"  # Options: "linear", "cosine", "constant"
@@ -367,7 +367,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     break
                 continue
             for file_idx, parquet_file in enumerate(parquet_files):
-                print(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}")
+                print(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
+                best_val_loss = float('inf')
                 # Pass directory and file name separately
                 file_dir = os.path.dirname(parquet_file)
                 file_name = os.path.basename(parquet_file)
@@ -393,7 +394,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                             epochs_without_improvement = 0
                             torch.save(model.state_dict(), "data/output/best_model.pt")
                         else:
-                            epochs_without_improvement += 1
+                            epochs_without_improvement += 1 * eval_interval
                             print(f"No improvement for {epochs_without_improvement} epoch(s).")
                             if epochs_without_improvement >= early_stopping_patience:
                                 print(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
@@ -442,7 +443,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     # Add explicit cleanup
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    if global_iter % 10 == 0:
+                    if global_iter % 3 == 0:
                         gc.collect()
                     train_time = time.time() - train_time
                     scheduler.step()
