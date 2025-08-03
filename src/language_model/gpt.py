@@ -10,6 +10,7 @@ from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
 import math
 import gc
+import torch.utils.checkpoint  # Add this import
 
 from helpers import print_gpu_memory_summary, wait_for_keypress
 from data_handler import load_and_process_data, get_batch, prepare_context_data_for_training, process_qa_pairs_dataset
@@ -17,10 +18,10 @@ from data_handler import load_and_process_data, get_batch, prepare_context_data_
 torch.manual_seed(1337)
 
 # hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
+batch_size = 8 # how many independent sequences will we process in parallel?
 block_size = 64 # what is the maximum context length for predictions?
-base_training_max_epochs = 100 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
-finetuning_max_epochs = 50  # Number of epochs for chat alignment fine-tuning
+base_training_max_epochs = 32 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
+finetuning_max_epochs = 10  # Number of epochs for chat alignment fine-tuning
 eval_interval = 5 # how many steps between evaluations?
 learning_rate = 3e-4
 eval_iters = 100
@@ -28,7 +29,7 @@ n_embd = 384
 n_head = 6
 n_layer = 4
 dropout = 0.15
-early_stopping_patience = 75  # Number of epochs to wait for improvement
+early_stopping_patience = 25  # Number of epochs to wait for improvement
 max_vocab_size = 3000 # Maximum vocabulary size
 warmup_steps = 1000  # Adjust based on dataset size
 lr_decay = "linear"  # Options: "linear", "cosine", "constant"
@@ -146,17 +147,18 @@ class Block(nn.Module):
             return x
 
 class GPTLanguageModel(nn.Module):
-    def __init__(self, vocab_size):
+    def __init__(self, vocab_size, use_checkpoint=True):
         super().__init__()
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([Block(n_embd, n_head=n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd) # final layer norm
         self.lm_head = nn.Linear(n_embd, vocab_size)
         # Tie weights between token embedding and output projection
         self.lm_head.weight = self.token_embedding_table.weight
         self.apply(self._init_weights)
+        self.use_checkpoint = use_checkpoint  # <-- Add this line
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -176,12 +178,19 @@ class GPTLanguageModel(nn.Module):
         attentions = []
         if return_attention:
             for block in self.blocks:
-                x, attn = block(x, return_attention=True)
+                if self.use_checkpoint:
+                    x, attn = torch.utils.checkpoint.checkpoint(block, x, return_attention, use_reentrant=False)
+                else:
+                    x, attn = block(x, return_attention)
                 attentions.append(attn)
             x = self.ln_f(x) # (B,T,C)
             logits = self.lm_head(x) # (B,T,vocab_size)
         else:
-            x = self.blocks(x) # (B,T,C)
+            for block in self.blocks:
+                if self.use_checkpoint:
+                    x = torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
+                else:
+                    x = block(x)
             x = self.ln_f(x) # (B,T,C)
             logits = self.lm_head(x) # (B,T,vocab_size)
 
@@ -286,13 +295,16 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         print(f"No parquet files found in {parquet_dir_path}")
         return
 
+    file_name_single = os.path.basename(parquet_files[0])
+
     # Load tokenizer and vocab size
     train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
         vocab_size=max_vocab_size,
         parquet_dir_path=parquet_dir_path,
         text_column=text_column,
         vocab_path=vocab_path,
-        batch_size=1
+        batch_size=1, # TODO Check this
+        single_file=file_name_single # Load first file to get tokenizer and vocab size
     )
 
     # Create TensorBoard writer
@@ -341,7 +353,11 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             super().__init__()
             self.model = model
         def forward(self, x):
+            # Temporarily disable checkpointing for graph tracing
+            orig = self.model.use_checkpoint
+            self.model.use_checkpoint = False
             logits, _ = self.model(x)
+            self.model.use_checkpoint = orig
             return logits
     sample_input = torch.zeros((1, block_size), dtype=torch.long).to(device)
     vis_model = ModelWrapper(model).to(device)
@@ -367,6 +383,26 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     break
                 continue
             for file_idx, parquet_file in enumerate(parquet_files):
+                # --- MEMORY CLEANUP BEFORE PROCESSING NEW FILE ---
+                print("Performing memory cleanup before loading new file...")
+                # Delete any large variables from previous file
+                try:
+                    del train_data
+                except Exception:
+                    pass
+                try:
+                    del val_data
+                except Exception:
+                    pass
+                gc.collect()
+                gc.collect()  # Call twice for extra effect
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                print_gpu_memory_summary()
+                # --- END MEMORY CLEANUP ---
+
                 print(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
                 best_val_loss = float('inf')
                 # Pass directory and file name separately
@@ -377,7 +413,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     parquet_dir_path=file_dir,  # directory
                     text_column=text_column,
                     vocab_path=vocab_path,
-                    batch_size=1,
+                    batch_size=1, # TODO Check this
                     single_file=file_name  # new argument to specify single file
                 )
                 for iter in range(base_training_max_epochs):
@@ -469,6 +505,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             if not parquet_files:
                 print("No files present after keypress. Base training finished.")
                 break
+            
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving model checkpoint...")
         torch.save(model.state_dict(), "data/output/model_interrupted.pt")
@@ -477,7 +514,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
         print("Model saved to data/output/model_checkpoint.pt")
     writer.close()
-    print(f"TensorBoard logging complete. View logs with: tensorboard --logdir={log_dir}")
+    print(f"\033[92mTensorBoard logging complete. View logs with: tensorboard --logdir={log_dir}\033[0m")
 
 def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_split=0.1, tensorboard_logdir=None):
     """Fine-tune the pre-trained model on QA chat alignment data with train/val split and verbose printing."""
@@ -572,7 +609,7 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_
     print("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
     if writer:
         writer.close()
-        print(f"TensorBoard logging complete. View logs with: tensorboard --logdir={tensorboard_logdir}")
+        print(f"\033[92mTensorBoard logging complete. View logs with: tensorboard --logdir={tensorboard_logdir}\033[0m")
 
 
 if __name__ == "__main__":
