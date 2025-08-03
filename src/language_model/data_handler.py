@@ -133,7 +133,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
             if text_column not in df.columns:
                 print(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
-            chunk_size_rows = 1  # Process 1 row at a time
+            chunk_size_rows = 5  # Process 5 rows at a time
             print(f"Chunk size: {chunk_size_rows} rows")
             for i in range(0, len(df), chunk_size_rows):
                 end_idx = min(i + chunk_size_rows, len(df))
@@ -210,7 +210,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
             if text_column not in df.columns:
                 print(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
-            chunk_size_rows = 200  # Process 200 rows at a time
+            chunk_size_rows = 5  # Process 5 rows at a time
             for i in range(0, len(df), chunk_size_rows):
                 end_idx = min(i + chunk_size_rows, len(df))
                 chunk_df = df.iloc[i:end_idx]
