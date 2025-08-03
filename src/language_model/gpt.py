@@ -10,9 +10,9 @@ from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LambdaLR
 import math
 import gc
-import torch.utils.checkpoint  # Add this import
+import torch.utils.checkpoint
 
-from helpers import print_gpu_memory_summary, wait_for_keypress
+from helpers import print_gpu_memory_summary, wait_for_keypress, get_device, count_parameters
 from data_handler import load_and_process_data, get_batch, prepare_context_data_for_training, process_qa_pairs_dataset
 
 torch.manual_seed(1337)
@@ -50,15 +50,7 @@ print(f"Max vocab size: {max_vocab_size}")
 print("\033[94m____________________________\033[0m\n")
 
 # Device selection - prioritize CUDA, then Apple Metal, fall back to CPU
-if torch.cuda.is_available():
-    print("CUDA GPU will be used.")
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    print("Apple Metal GPU will be used.")
-    device = torch.device("mps")
-else:
-    print("No GPU available, CPU will be used.")
-    device = torch.device("cpu")
+device = get_device()
 
 class Head(nn.Module):
     """ one head of self-attention """
@@ -342,7 +334,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
 
     # Initialize model with vocabulary size
     model = GPTLanguageModel(vocab_size).to(device)
-    print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
+    print(f"{count_parameters(model)/1e6:.2f} M parameters")
     print(f"Model is on device: {next(model.parameters()).device}")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     total_steps = base_training_max_epochs * (len(train_data) // batch_size)

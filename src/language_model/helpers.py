@@ -13,14 +13,12 @@ def get_device():
 
 def print_gpu_memory_summary():
     if torch.cuda.is_available():
-        # Get memory usage in GB (1GB = 1024MB = 1024*1024*1024 bytes)
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        props = torch.cuda.get_device_properties(0)
+        total = props.total_memory / 1024**3
         reserved = torch.cuda.memory_reserved() / 1024**3
         allocated = torch.cuda.memory_allocated() / 1024**3
-        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
-        max_reserved = torch.cuda.max_memory_reserved() / 1024**3
         free = total - reserved
-        print(f"GPU memory summary: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free:.2f}GB free, {total:.2f}GB total, {max_allocated:.2f}GB max allocated, {max_reserved:.2f}GB max reserved")
+        print(f"GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free:.2f}GB free, {total:.2f}GB total")
     else:
         print("No CUDA GPU available.")
 def print_memory_usage():
@@ -63,3 +61,7 @@ def wait_for_keypress():
     print("\033[93m=========================================\033[0m\n")
     input()  # Wait for Enter key
     print("Continuing with next batch...")
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters())

@@ -59,9 +59,7 @@ class SubwordTokenizer:
     
     def encode(self, text: str) -> List[int]:
         """Encode text to token IDs"""
-        # The encode method returns a dictionary with IDs
-        encoded = self.tokenizer.encode(text)
-        return encoded.ids
+        return self.tokenizer.encode(text).ids
     
     def decode(self, tokens: List[int]) -> str:
         """Decode token IDs back to text"""
