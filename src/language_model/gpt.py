@@ -18,7 +18,7 @@ from data_handler import load_and_process_data, get_batch, prepare_context_data_
 torch.manual_seed(1337)
 
 # hyperparameters
-batch_size = 8 # how many independent sequences will we process in parallel?
+batch_size = 4 # how many independent sequences will we process in parallel?
 block_size = 64 # what is the maximum context length for predictions?
 base_training_max_epochs = 32 # how many epochs to train for as max, early stopping will stop training if no improvement is seen
 finetuning_max_epochs = 10  # Number of epochs for chat alignment fine-tuning
@@ -153,12 +153,10 @@ class GPTLanguageModel(nn.Module):
         self.use_checkpoint = use_checkpoint  # <-- Add this line
 
     def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
+            if isinstance(module, nn.Linear) and module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None, return_attention=False):
         B, T = idx.shape
@@ -167,24 +165,24 @@ class GPTLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx) # (B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) # (T,C)
         x = tok_emb + pos_emb # (B,T,C)
-        attentions = []
-        if return_attention:
-            for block in self.blocks:
-                if self.use_checkpoint:
+        attentions = [] if return_attention else None
+        
+        for block in self.blocks:
+            if self.use_checkpoint:
+                if return_attention:
                     x, attn = torch.utils.checkpoint.checkpoint(block, x, return_attention, use_reentrant=False)
+                    attentions.append(attn)
                 else:
-                    x, attn = block(x, return_attention)
-                attentions.append(attn)
-            x = self.ln_f(x) # (B,T,C)
-            logits = self.lm_head(x) # (B,T,vocab_size)
-        else:
-            for block in self.blocks:
-                if self.use_checkpoint:
                     x = torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
+            else:
+                if return_attention:
+                    x, attn = block(x, return_attention)
+                    attentions.append(attn)
                 else:
                     x = block(x)
-            x = self.ln_f(x) # (B,T,C)
-            logits = self.lm_head(x) # (B,T,vocab_size)
+    
+        x = self.ln_f(x) # (B,T,C)
+        logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
             loss = None
@@ -200,10 +198,12 @@ class GPTLanguageModel(nn.Module):
 
     def generate(self, idx, max_new_tokens, temperature=1.0, return_attention=False, eos_token_id=None):
         # idx is (B, T) array of indices in the current context
-        all_attentions = []
+        all_attentions = [] if return_attention else None
+        
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens
             idx_cond = idx[:, -block_size:]
+            
             # get the predictions
             if return_attention:
                 logits, _, attentions = self(idx_cond, return_attention=True)
@@ -212,37 +212,25 @@ class GPTLanguageModel(nn.Module):
                     raise ValueError(f"Expected logits to have shape (B, T, C) but got {logits.shape}")
             else:
                 logits, _ = self(idx_cond)
-            # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, C)
-            # apply temperature
-            logits = logits / temperature
+                
+            # focus only on the last time step and apply temperature
+            logits = logits[:, -1, :] / temperature
             # apply softmax to get probabilities
             probs = F.softmax(logits, dim=-1) # (B, C)
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             
-            # Check if the generated token is the EOS token
-            if eos_token_id is not None and (idx_next == eos_token_id).any():
-                # Stop generation for sequences that produced EOS
-                for b in range(idx_next.size(0)):
-                    if idx_next[b, 0] == eos_token_id:
-                        # We still append this final token before stopping
-                        idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
-                        if return_attention and attentions:
-                            all_attentions.append([[a.detach().cpu() for a in layer] for layer in attentions])
-                        if return_attention:
-                            return idx, all_attentions
-                        return idx
-        
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
+            
             if return_attention:
-                # Keep attention for all tokens, not just the last one
                 all_attentions.append([[a.detach().cpu() for a in layer] for layer in attentions])
             
-        if return_attention:
-            return idx, all_attentions
-        return idx
+            # Check if the generated token is the EOS token
+            if eos_token_id is not None and (idx_next == eos_token_id).any():
+                break
+        
+        return (idx, all_attentions) if return_attention else idx
 
 
 @torch.no_grad()
@@ -267,11 +255,14 @@ def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
         # Warmup phase
         if current_step < warmup_steps:
             return float(current_step) / float(max(1, warmup_steps))
-        # Decay phase
+        
+        # Decay phase - progress calculation
+        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        
+        # Different decay strategies
         if lr_decay == "linear":
-            return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
+            return max(0.0, 1.0 - progress)
         elif lr_decay == "cosine":
-            progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
             return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
         else:  # constant
             return 1.0
@@ -295,7 +286,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         parquet_dir_path=parquet_dir_path,
         text_column=text_column,
         vocab_path=vocab_path,
-        batch_size=1, # TODO Check this
+        batch_size=batch_size,
         single_file=file_name_single # Load first file to get tokenizer and vocab size
     )
 
@@ -402,10 +393,10 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 file_name = os.path.basename(parquet_file)
                 train_data, val_data, _, _, _ = load_and_process_data(
                     vocab_size=max_vocab_size,
-                    parquet_dir_path=file_dir,  # directory
+                    parquet_dir_path=file_dir,
                     text_column=text_column,
                     vocab_path=vocab_path,
-                    batch_size=1, # TODO Check this
+                    batch_size=batch_size,
                     single_file=file_name  # new argument to specify single file
                 )
                 for iter in range(base_training_max_epochs):
@@ -508,7 +499,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     writer.close()
     print(f"\033[92mTensorBoard logging complete. View logs with: tensorboard --logdir={log_dir}\033[0m")
 
-def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=8, val_split=0.1, tensorboard_logdir=None):
+def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_size, val_split=0.1, tensorboard_logdir=None):
     """Fine-tune the pre-trained model on QA chat alignment data with train/val split and verbose printing."""
     model.train()
     device = next(model.parameters()).device
