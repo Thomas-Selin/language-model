@@ -2,7 +2,6 @@ from config import N_EMBD, N_HEAD, N_LAYER, BLOCK_SIZE, DROPOUT
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import math
 import torch.utils.checkpoint
 
 n_embd = N_EMBD

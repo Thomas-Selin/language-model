@@ -1,4 +1,3 @@
-from math import e
 from helpers import print_memory_usage, get_device
 from subword_tokenizer import SubwordTokenizer
 import pandas as pd
