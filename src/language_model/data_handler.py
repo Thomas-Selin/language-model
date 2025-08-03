@@ -61,7 +61,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         # Collect text samples for vocab building (use less memory)
         # We don't need the full text for building vocabulary, just representative samples
         sample_texts = []
-        sample_size = 1000000  # Limit sample size per file to save memory
+        sample_size = 10000000  # TODO: Limit sample size per file to save memory
         total_samples = 0
         
         for file in first_batch:
@@ -91,7 +91,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                 print(f"Added {len(text_sample)} chars from {file} for vocabulary building")
                 
                 # If we have enough samples, stop collecting
-                if total_samples >= 5000000:  # 5MB of text should be enough for vocab
+                if total_samples >= 50000000: # TODO
                     break
                     
             except Exception as e:
