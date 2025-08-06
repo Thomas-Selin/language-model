@@ -5,7 +5,7 @@ from subword_tokenizer import SubwordTokenizer
 from helpers import get_device
 from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
 from model import GPTLanguageModel
-from train_utils import base_train_model, train_chat_alignment
+from train_utils import base_train_model, train_chat_alignment, train_and_poll
 from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH
 
 if __name__ == "__main__":
@@ -23,14 +23,16 @@ if __name__ == "__main__":
     print(f"Context data extracted to {context_parquet_path}")
     print("This file should be included in base training at the end by moving it to the parquet_files directory.")
 
-    # # Get current time for logging
+    # Get current time for logging
     training_start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    # Base training - will now include the context data file
+    # Base training - now uses train_and_poll for polling and deletion
+    print("\n=== Starting base training with polling and auto-deletion ===")
     base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time)
 
     # Now process QA dataset for fine-tuning
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
+    vocab_size = tokenizer.get_vocab_size()
     print("\n=== Creating QA dataset for fine-tuning ===")
     from config import BLOCK_SIZE
     block_size = BLOCK_SIZE  # Should match model config
@@ -42,7 +44,6 @@ if __name__ == "__main__":
     print(f'QA tensor shape: {qa_tensor.shape}')
     
     # Load pre-trained model
-    vocab_size = tokenizer.get_vocab_size()
     device = get_device()
     model = GPTLanguageModel(vocab_size).to(device)
     model.load_state_dict(torch.load('data/output/model_checkpoint.pt', map_location=device))

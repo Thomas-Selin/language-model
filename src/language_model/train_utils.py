@@ -8,8 +8,8 @@ from torch.utils.tensorboard import SummaryWriter
 import os
 import time
 import datetime
-from helpers import print_gpu_memory_summary, wait_for_keypress, get_device, count_parameters
-from data_handler import get_batch, load_and_process_data
+from helpers import print_memory_usage, wait_for_keypress, get_device, count_parameters
+from data_handler import get_batch, load_and_process_data, poll_for_new_parquet_file
 from model import GPTLanguageModel
 from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY
 
@@ -79,6 +79,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     log_dir = os.path.join('data', 'output', 'tensorboard_logs', training_start_time)
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
+    print(f"\033[92mTensorBoard logging started View logs with: tensorboard --logdir={log_dir}\033[0m")
     writer.add_text('Session Information', f"""
     ## Hyperparameters
     - Batch size: {batch_size}
@@ -133,7 +134,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         while True:
             parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
             # Remove the first file if present (avoid double processing)
-            parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
+            # parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
             if not parquet_files:
                 print(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
                 wait_for_keypress()
@@ -159,7 +160,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     torch.cuda.empty_cache()
                 if hasattr(torch, "mps") and torch.backends.mps.is_available():
                     torch.mps.empty_cache()
-                print_gpu_memory_summary()
+                print_memory_usage()
                 print(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
                 best_val_loss = float('inf')
                 file_dir = os.path.dirname(parquet_file)
@@ -179,10 +180,19 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     if iter % eval_interval == 0 or iter == base_training_max_epochs - 1:
                         losses = estimate_loss(model, train_data, val_data)
                         print("\033[94m____________________________\033[0m\n")
-                        print_gpu_memory_summary()
+                        print_memory_usage()
                         print(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, \U0001F4CF val loss \033[94m{losses['val']:.4f}\033[0m")
                         
-                        best_val_loss, epochs_without_improvement = check_early_stopping(losses['val'], best_val_loss, early_stopping_patience, epochs_without_improvement)
+                        # Save best model if val loss improves
+                        if losses['val'] < best_val_loss:
+                            print(f"Validation loss improved ({losses['val']:.4f} < {best_val_loss:.4f}). Saving best model.")
+                            best_val_loss = losses['val']
+                            torch.save(model.state_dict(), "data/output/best_model.pt")
+                            epochs_without_improvement = 0
+                        else:
+                            epochs_without_improvement += 1
+                            print(f"Epochs without improvement: {epochs_without_improvement}")
+                        
                         if epochs_without_improvement >= early_stopping_patience:
                             print(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
                             print("Restoring best model weights...")
@@ -233,7 +243,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     train_time = time.time() - train_time
                     scheduler.step()
                     epoch_duration = time.time() - epoch_start_time
-                    print(f"File {file_idx+1}, Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
+                    # print(f"File {file_idx+1}, Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
                     writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
                     writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
                     if iter % eval_interval == 0:
@@ -243,14 +253,31 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         print("Early stopping triggered. Moving to next file if available.")
                         break
                 epochs_without_improvement = 0
-            print("\n\033[94mAll files in folder processed. Please delete old files and upload new ones, then press Enter to continue, or type 'q' and Enter to finish base training.\033[0m\n")
-            user_input = input()
-            if user_input.strip().lower() == 'q':
-                print("Base training finished by user request.")
-                break
-            parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
-            if not parquet_files:
-                print("No files present after keypress. Base training finished.")
+                # Delete the file after training
+                try:
+                    os.remove(parquet_file)
+                    print(f"Deleted file after training: {parquet_file}")
+                except Exception as e:
+                    print(f"Error deleting file {parquet_file}: {e}")
+            print("\n\033[94mAll files in folder processed. Waiting for new files... (Press 'q' then Enter to finish base training)\033[0m\n")
+            # Poll for new files, but allow user to quit by pressing 'q' and Enter
+            import sys
+            import select
+            print("Polling for new files. Press 'q' then Enter at any time to finish base training.")
+            user_input = None  # Fix: ensure user_input is always defined
+            while True:
+                # Check for user input (non-blocking)
+                print("Waiting for new files...", end='\r', flush=True)
+                if sys.stdin in select.select([sys.stdin], [], [], 5)[0]:
+                    user_input = sys.stdin.readline().strip().lower()
+                    if user_input == 'q':
+                        print("Base training finished by user request.")
+                        break
+                # Use poll_for_new_parquet_file to wait for a fully uploaded file
+                new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=2)
+                if new_file:
+                    break
+            if user_input == 'q':
                 break
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving model checkpoint...")
@@ -260,7 +287,6 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
         print("Model saved to data/output/model_checkpoint.pt")
     writer.close()
-    print(f"\033[92mTensorBoard logging complete. View logs with: tensorboard --logdir={log_dir}\033[0m")
 
 def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_size, val_split=0.1, tensorboard_logdir=None):
     model.train()
@@ -280,6 +306,7 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
     writer = None
     if tensorboard_logdir is not None:
         writer = SummaryWriter(tensorboard_logdir)
+        print(f"\033[92mTensorBoard logging started. View logs with: tensorboard --logdir={tensorboard_logdir}\033[0m")
     for epoch in range(epochs):
         print(f"\nEpoch {epoch+1}/{epochs} START")
         model.train()
@@ -302,6 +329,7 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
             global_step += 1
             if batch_idx % 1000 == 0:
                 print(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
+                print_memory_usage()
         avg_train_loss = train_loss / train_tensor.size(0)
         print(f"Epoch {epoch+1} TRAINING DONE. Avg Train Loss: {avg_train_loss:.4f}")
         model.eval()
@@ -322,8 +350,17 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
                     print(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
         avg_val_loss = val_loss / val_tensor.size(0)
         print(f"Epoch {epoch+1} VALIDATION DONE. Avg Val Loss: {avg_val_loss:.4f}")
-        
-        best_val_loss, epochs_without_improvement = check_early_stopping(avg_val_loss, best_val_loss, early_stopping_patience, epochs_without_improvement)
+
+        # Save best model if val loss improves
+        if avg_val_loss < best_val_loss:
+            print(f"Validation loss improved ({avg_val_loss:.4f} < {best_val_loss:.4f}). Saving best model.")
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), "data/output/chat_aligned_best_model.pt")
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            print(f"Epochs without improvement: {epochs_without_improvement}")
+
         if epochs_without_improvement >= early_stopping_patience:
             print(f"Early stopping triggered at epoch {epoch+1}. Best val loss: {best_val_loss:.4f}")
             print("Restoring best model weights...")
@@ -331,15 +368,41 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
             break
     torch.save(model.state_dict(), "data/output/chat_aligned_model.pt")
     print("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
-    if writer:
-        writer.close()
-        print(f"\033[92mTensorBoard logging complete. View logs with: tensorboard --logdir={tensorboard_logdir}\033[0m")
 
-def check_early_stopping(val_loss, best_val_loss, patience, epochs_without_improvement):
-    if val_loss < best_val_loss:
-        return val_loss, 0
-    else:
-        epochs_without_improvement += 1
-        if epochs_without_improvement >= patience:
-            return best_val_loss, patience
-    return best_val_loss, epochs_without_improvement
+
+def train_and_poll(parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', batch_size_files=1, training_start_time=None):
+    """
+    Polls for new parquet files, trains on each, deletes after training, then exits when no new files remain.
+    Allows user to quit by pressing 'q' and Enter while waiting for new files.
+    """
+    import sys
+    import select
+    import time
+    while True:
+        # Poll for a new, fully uploaded parquet file
+        print("Polling for new files. Press 'q' then Enter at any time to finish base training.")
+        while True:
+            # Non-blocking check for user input
+            print("Waiting for new files...", end='\r', flush=True)
+            if sys.stdin in select.select([sys.stdin], [], [], 5)[0]:
+                user_input = sys.stdin.readline().strip().lower()
+                if user_input == 'q':
+                    print("Base training finished by user request.")
+                    return
+            new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=2)
+            if new_file:
+                break
+        # Train on the single file
+        print(f"Training on file: {new_file}")
+        base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time)
+        print(f"Finished training on {new_file}")
+        # Delete the file after training
+        new_file_path = os.path.join(parquet_dir_path, new_file)
+        try:
+            os.remove(new_file_path)
+            print(f"Deleted file after training: {new_file_path}")
+        except Exception as e:
+            print(f"Error deleting file {new_file_path}: {e}")
+        # Wait a short time before polling again
+        time.sleep(2)
+    print("All files processed. Proceeding to fine-tuning.")

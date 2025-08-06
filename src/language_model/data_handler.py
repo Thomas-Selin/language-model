@@ -5,8 +5,36 @@ import torch
 import os
 import datetime
 import gc
+import time
 
 device = get_device()
+
+def is_file_fully_uploaded(file_path, check_interval=2, checks=3):
+    """Returns True if file size is stable for a few checks (not being uploaded)."""
+    prev_size = -1
+    for _ in range(checks):
+        size = os.path.getsize(file_path)
+        if size == prev_size:
+            return True
+        prev_size = size
+        time.sleep(check_interval)
+    return False
+
+def poll_for_new_parquet_file(parquet_dir, poll_interval=5):
+    """Polls for a new, fully uploaded parquet file in the directory."""
+    seen_files = set()  # Start with empty set to process all files present at startup
+    while True:
+        current_files = set(f for f in os.listdir(parquet_dir) if f.endswith('.parquet'))
+        new_files = current_files - seen_files
+        for file in new_files:
+            file_path = os.path.join(parquet_dir, file)
+            if is_file_fully_uploaded(file_path):
+                print(f"Detected new, fully uploaded file: {file}")
+                seen_files.add(file)  # Mark as seen
+                return file
+            else:
+                print(f"File {file} is still being uploaded, waiting...")
+        time.sleep(poll_interval)
 
 def load_text_from_parquet(parquet_file, text_column='text'):
     """Load text data from a parquet file"""
@@ -133,7 +161,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
             if text_column not in df.columns:
                 print(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
-            chunk_size_rows = 5  # Process 5 rows at a time
+            chunk_size_rows = 300  # Process 5 rows at a time
             print(f"Chunk size: {chunk_size_rows} rows")
             for i in range(0, len(df), chunk_size_rows):
                 end_idx = min(i + chunk_size_rows, len(df))
@@ -210,7 +238,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
             if text_column not in df.columns:
                 print(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
-            chunk_size_rows = 5  # Process 5 rows at a time
+            chunk_size_rows = 300  # Process 5 rows at a time
             for i in range(0, len(df), chunk_size_rows):
                 end_idx = min(i + chunk_size_rows, len(df))
                 chunk_df = df.iloc[i:end_idx]

@@ -14,23 +14,12 @@ def get_device():
     else:
         logging.info("No GPU available, CPU will be used.")
         return torch.device("cpu")
-
-def print_gpu_memory_summary():
-    if torch.cuda.is_available():
-        props = torch.cuda.get_device_properties(0)
-        total = props.total_memory / 1024**3
-        reserved = torch.cuda.memory_reserved() / 1024**3
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        free = total - reserved
-        logging.info(f"GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free:.2f}GB free, {total:.2f}GB total")
-    else:
-        logging.info("No CUDA GPU available.")
+        
 def print_memory_usage():
-    """Print percentage of RAM and GPU memory used."""
+    """Print percentage of RAM, GPU memory used, and disk usage for /workspace."""
     try:
         import psutil
         import os
-        process = psutil.Process(os.getpid())
         total_mem = psutil.virtual_memory().total
         used_mem = psutil.virtual_memory().used
         ram_percent = used_mem / total_mem * 100
@@ -48,13 +37,25 @@ def print_memory_usage():
             total_gpu = torch.cuda.get_device_properties(0).total_memory
             allocated_gpu = torch.cuda.memory_allocated()
             gpu_percent = allocated_gpu / total_gpu * 100
-            logging.info(f"GPU usage: {gpu_percent:.2f}% of GPU memory")
+            logging.info(f"GPU usage: \033[93m{gpu_percent:.2f}%\033[0m of GPU memory")
         else:
             logging.info("No CUDA GPU available.")
     except ImportError:
         logging.info("Could not import torch. Install with 'pip install torch' to monitor GPU usage.")
     except Exception as e:
         logging.info(f"Error checking GPU usage: {e}")
+
+    # Disk usage for /workspace
+    try:
+        workspace_path = "/workspace"
+        usage = psutil.disk_usage(workspace_path)
+        logging.info(
+            f"Disk usage for {workspace_path}: {usage.percent:.2f}% used "
+            f"({usage.used / (1024 ** 3):.2f} GiB used / {usage.total / (1024 ** 3):.2f} GiB total, "
+            f"{usage.free / (1024 ** 3):.2f} GiB free)"
+        )
+    except Exception as e:
+        logging.info(f"Error checking disk usage: {e}")
 
 
 def wait_for_keypress():
