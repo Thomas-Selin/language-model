@@ -1,6 +1,6 @@
+import logging
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 import os
-import json
 from typing import List
 
 def create_bpe_tokenizer(text_files, vocab_size=3000):
@@ -55,8 +55,8 @@ class SubwordTokenizer:
         """Save the tokenizer to a file"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tokenizer.save(path)
-        print(f"Tokenizer saved to {path}")
-    
+        logging.info(f"Tokenizer saved to {path}")
+
     def encode(self, text: str) -> List[int]:
         """Encode text to token IDs"""
         return self.tokenizer.encode(text).ids

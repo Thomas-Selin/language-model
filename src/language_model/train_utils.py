@@ -64,12 +64,12 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     import glob
     parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
     if not parquet_files:
-        print(f"No parquet files found in {parquet_dir_path}")
+        logging.info(f"No parquet files found in {parquet_dir_path}")
         return
     log_dir = os.path.join('data', 'output', 'tensorboard_logs', training_start_time)
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
-    print(f"\033[92mTensorBoard logging started View logs with: tensorboard --logdir={log_dir}\033[0m")
+    logging.info(f"\033[92mTensorBoard logging started. View logs with: tensorboard --logdir={log_dir}\033[0m")
     writer.add_text('Session Information', f"""
     ## Hyperparameters
     - Batch size: {batch_size}
@@ -92,8 +92,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     - Current time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     """)
     model = GPTLanguageModel(max_vocab_size).to(device)
-    print(f"{count_parameters(model)/1e6:.2f} M parameters")
-    print(f"Model is on device: {next(model.parameters()).device}")
+    logging.info(f"{count_parameters(model)/1e6:.2f} M parameters")
+    logging.info(f"Model is on device: {next(model.parameters()).device}")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
     scaler = GradScaler(enabled=torch.cuda.is_available())
@@ -122,16 +122,16 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             # Remove the first file if present (avoid double processing)
             # parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
             if not parquet_files:
-                print(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
+                logging.info(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
                 wait_for_keypress()
                 parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
                 # parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
                 if not parquet_files:
-                    print("No files present after keypress. Base training finished.")
+                    logging.info("No files present after keypress. Base training finished.")
                     break
                 continue
             for file_idx, parquet_file in enumerate(parquet_files):
-                print("Performing memory cleanup before loading new file...")
+                logging.debug("Performing memory cleanup before loading new file...")
                 try:
                     del train_data
                 except Exception:
@@ -146,8 +146,9 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     torch.cuda.empty_cache()
                 if hasattr(torch, "mps") and torch.backends.mps.is_available():
                     torch.mps.empty_cache()
+                logging.debug("Memory usage after cleanup:")
                 print_memory_usage()
-                print(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
+                logging.info(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
                 best_val_loss = float('inf')
                 file_dir = os.path.dirname(parquet_file)
                 file_name = os.path.basename(parquet_file)
@@ -164,46 +165,47 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 scheduler = get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps)
                 for iter in range(base_training_max_epochs):
                     if total_epochs_run >= global_max_epochs:
-                        print(f"Reached global epoch limit of {global_max_epochs}. Stopping training.")
+                        logging.info(f"Reached global epoch limit of {global_max_epochs}. Stopping training.")
                         break
                     if iter % eval_interval == 0 or iter == base_training_max_epochs - 1:
                         losses = estimate_loss(model, train_data, val_data)
-                        print("\033[94m____________________________\033[0m\n")
+                        logging.info("____________________________")
+                        logging.debug("Memory usage before evaluation:")
                         print_memory_usage()
-                        print(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, \U0001F4CF val loss \033[94m{losses['val']:.4f}\033[0m")
+                        logging.info(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
                         
                         # Save best model if val loss improves
                         if losses['val'] < best_val_loss:
-                            print(f"Validation loss improved ({losses['val']:.4f} < {best_val_loss:.4f}). Saving best model.")
+                            logging.info(f"Validation loss improved ({losses['val']:.4f} < {best_val_loss:.4f}). Saving best model.")
                             best_val_loss = losses['val']
                             torch.save(model.state_dict(), "data/output/best_model.pt")
                             epochs_without_improvement = 0
                         else:
                             epochs_without_improvement += 1
-                            print(f"Epochs without improvement: {epochs_without_improvement}")
+                            logging.info(f"Epochs without improvement: {epochs_without_improvement}")
                         
                         if epochs_without_improvement >= early_stopping_patience:
-                            print(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
-                            print("Restoring best model weights...")
+                            logging.info(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
+                            logging.info("Restoring best model weights...")
                             model.load_state_dict(torch.load("data/output/best_model.pt"))
                             break
-                        print(f"[DEBUG] Writing train loss to TensorBoard: {losses['train']} at step {global_iter}")
+                        logging.debug(f"Writing train loss to TensorBoard: {losses['train']} at step {global_iter}")
                         writer.add_scalar('Loss/train', losses['train'], global_iter)
-                        print(f"[DEBUG] Writing val loss to TensorBoard: {losses['val']} at step {global_iter}")
+                        logging.debug(f"Writing val loss to TensorBoard: {losses['val']} at step {global_iter}")
                         writer.add_scalar('Loss/val', losses['val'], global_iter)
                         if torch.cuda.is_available():
-                            print(f"[DEBUG] Writing CUDA memory stats to TensorBoard at step {global_iter}")
+                            logging.debug(f"Writing CUDA memory stats to TensorBoard at step {global_iter}")
                             writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
                             writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
                             writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
                         if global_iter % (eval_interval * 10) == 0:
-                            print(f"[DEBUG] Writing parameter histograms to TensorBoard at step {global_iter}")
+                            logging.debug(f"Writing parameter histograms to TensorBoard at step {global_iter}")
                             for name, param in model.named_parameters():
                                 writer.add_histogram(f'Parameters/{name}', param, global_iter)
                                 if param.grad is not None:
                                     writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
                         if global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1):
-                            print(f"[DEBUG] Writing generated text to TensorBoard at step {global_iter}")
+                            logging.debug(f"Writing generated text to TensorBoard at step {global_iter}")
                             context = torch.zeros((1, 1), dtype=torch.long, device=device)
                             sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=1.0)[0].tolist())
                             writer.add_text('Generated Text 1.0 temp', sample_text, global_iter)
@@ -237,36 +239,36 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     train_time = time.time() - train_time
                     scheduler.step()
                     epoch_duration = time.time() - epoch_start_time
-                    print(f"[DEBUG] Writing epoch duration to TensorBoard: {epoch_duration} at step {global_iter}")
+                    logging.debug(f"Writing epoch duration to TensorBoard: {epoch_duration} at step {global_iter}")
                     writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
-                    print(f"[DEBUG] Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
+                    logging.debug(f"Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
                     writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
                     if iter % eval_interval == 0:
-                        print(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
+                        logging.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
                     global_iter += 1
                     if epochs_without_improvement >= early_stopping_patience:
-                        print("Early stopping triggered. Moving to next file if available.")
+                        logging.info("Early stopping triggered. Moving to next file if available.")
                         break
                 epochs_without_improvement = 0
                 # Delete the file after training
                 try:
                     os.remove(parquet_file)
-                    print(f"Deleted file after training: {parquet_file}")
+                    logging.info(f"Deleted file after training: {parquet_file}")
                 except Exception as e:
-                    print(f"Error deleting file {parquet_file}: {e}")
-            print("\n\033[94mAll files in folder processed. Waiting for new files... (Press 'q' then Enter to finish base training)\033[0m\n")
+                    logging.info(f"Error deleting file {parquet_file}: {e}")
+            logging.info("\nAll files in folder processed. Waiting for new files... (Press 'q' then Enter to finish base training)\n")
             # Poll for new files, but allow user to quit by pressing 'q' and Enter
             import sys
             import select
-            print("Polling for new files. Press 'q' then Enter at any time to finish base training.")
+            logging.info("Polling for new files. Press 'q' then Enter at any time to finish base training.")
             user_input = None  # Fix: ensure user_input is always defined
             while True:
                 # Check for user input (non-blocking)
-                print("Waiting for new files...", end='\r', flush=True)
+                logging.debug("Waiting for new files...")
                 if sys.stdin in select.select([sys.stdin], [], [], 5)[0]:
                     user_input = sys.stdin.readline().strip().lower()
                     if user_input == 'q':
-                        print("Base training finished by user request.")
+                        logging.info("Base training finished by user request.")
                         break
                 # Use poll_for_new_parquet_file to wait for a fully uploaded file
                 new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=4)
@@ -275,14 +277,14 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             if user_input == 'q':
                 break
     except KeyboardInterrupt:
-        print("\nTraining interrupted by user. Saving model checkpoint...")
+        logging.info("\nTraining interrupted by user. Saving model checkpoint...")
         torch.save(model.state_dict(), "data/output/model_interrupted.pt")
-        print("Model saved to data/output/model_interrupted.pt")
+        logging.info("Model saved to data/output/model_interrupted.pt")
     else:
         torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
-        print("Model saved to data/output/model_checkpoint.pt")
+        logging.info("Model saved to data/output/model_checkpoint.pt")
     if writer:
-        print("[DEBUG] Closing TensorBoard writer.")
+        logging.debug("[DEBUG] Closing TensorBoard writer.")
         writer.close()
 
 def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_size, val_split=0.1, tensorboard_logdir=None):
@@ -299,13 +301,13 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
     global_step = 0
     best_val_loss = float('inf')
     epochs_without_improvement = 0
-    print(f"Total samples: {num_samples}, Train: {train_tensor.size(0)}, Val: {val_tensor.size(0)}")
+    logging.info(f"Total samples: {num_samples}, Train: {train_tensor.size(0)}, Val: {val_tensor.size(0)}")
     writer = None
     if tensorboard_logdir is not None:
         writer = SummaryWriter(tensorboard_logdir)
-        print(f"\033[92mTensorBoard logging started. View logs with: tensorboard --logdir={tensorboard_logdir}\033[0m")
+        logging.info(f"TensorBoard logging started. View logs with: tensorboard --logdir={tensorboard_logdir}")
     for epoch in range(epochs):
-        print(f"\nEpoch {epoch+1}/{epochs} START")
+        logging.info(f"\nEpoch {epoch+1}/{epochs} START")
         model.train()
         train_loss = 0.0
         num_train_batches = (train_tensor.size(0) + batch_size - 1) // batch_size
@@ -322,14 +324,15 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
             optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * inputs.size(0)
             if writer:
-                print(f"[DEBUG] Writing train loss to TensorBoard: {loss.item()} at step {global_step}")
+                logging.debug(f"Writing train loss to TensorBoard: {loss.item()} at step {global_step}")
                 writer.add_scalar('Loss/train', loss.item(), global_step)
             global_step += 1
             if batch_idx % 1000 == 0:
-                print(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
+                logging.info(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
+                logging.debug("Memory usage:")
                 print_memory_usage()
         avg_train_loss = train_loss / train_tensor.size(0)
-        print(f"Epoch {epoch+1} TRAINING DONE. Avg Train Loss: {avg_train_loss:.4f}")
+        logging.info(f"Epoch {epoch+1} TRAINING DONE. Avg Train Loss: {avg_train_loss:.4f}")
         model.eval()
         val_loss = 0.0
         num_val_batches = (val_tensor.size(0) + batch_size - 1) // batch_size
@@ -342,28 +345,28 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
                     logits, loss = model(inputs, targets)
                 val_loss += loss.item() * inputs.size(0)
                 if writer:
-                    print(f"[DEBUG] Writing val loss to TensorBoard: {loss.item()} at step {global_step}")
+                    logging.debug(f"Writing val loss to TensorBoard: {loss.item()} at step {global_step}")
                     writer.add_scalar('Loss/val', loss.item(), global_step)
                 global_step += 1
                 if batch_idx % 250 == 0:
-                    print(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
+                    logging.info(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
         avg_val_loss = val_loss / val_tensor.size(0)
-        print(f"Epoch {epoch+1} VALIDATION DONE. Avg Val Loss: {avg_val_loss:.4f}")
+        logging.info(f"Epoch {epoch+1} VALIDATION DONE. Avg Val Loss: {avg_val_loss:.4f}")
 
         # Save best model if val loss improves
         if avg_val_loss < best_val_loss:
-            print(f"Validation loss improved ({avg_val_loss:.4f} < {best_val_loss:.4f}). Saving best model.")
+            logging.info(f"Validation loss improved ({avg_val_loss:.4f} < {best_val_loss:.4f}). Saving best model.")
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), "data/output/chat_aligned_best_model.pt")
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
-            print(f"Epochs without improvement: {epochs_without_improvement}")
+            logging.info(f"Epochs without improvement: {epochs_without_improvement}")
 
         if epochs_without_improvement >= early_stopping_patience:
-            print(f"Early stopping triggered at epoch {epoch+1}. Best val loss: {best_val_loss:.4f}")
-            print("Restoring best model weights...")
+            logging.info(f"Early stopping triggered at epoch {epoch+1}. Best val loss: {best_val_loss:.4f}")
+            logging.info("Restoring best model weights...")
             model.load_state_dict(torch.load("data/output/chat_aligned_best_model.pt"))
             break
     torch.save(model.state_dict(), "data/output/chat_aligned_model.pt")
-    print("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
+    logging.info("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
