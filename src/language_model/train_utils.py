@@ -12,6 +12,7 @@ from helpers import print_memory_usage, wait_for_keypress, get_device, count_par
 from data_handler import get_batch, load_and_process_data, poll_for_new_parquet_file
 from model import GPTLanguageModel
 from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY
+import logging
 
 # Hyperparameters (should be imported or passed in real use)
 batch_size = BATCH_SIZE
@@ -65,17 +66,6 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     if not parquet_files:
         print(f"No parquet files found in {parquet_dir_path}")
         return
-    file_name_single = os.path.basename(parquet_files[0])
-    train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
-        vocab_size=max_vocab_size,
-        parquet_dir_path=parquet_dir_path,
-        text_column=text_column,
-        vocab_path=vocab_path,
-        batch_size=batch_size,
-        single_file=file_name_single
-    )
-    # Remove the first file from the list to avoid double processing
-    parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
     log_dir = os.path.join('data', 'output', 'tensorboard_logs', training_start_time)
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
@@ -97,19 +87,15 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     ## Environment
     - Device: {device}
     ## Data
-    - Tokenizer vocab size: {vocab_size}
     - Tokenizer vocab path: {vocab_path}
-    - Train data size: {len(train_data)} tokens
-    - Validation data size: {len(val_data)} tokens
     ## Timing
     - Current time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     """)
-    model = GPTLanguageModel(vocab_size).to(device)
+    model = GPTLanguageModel(max_vocab_size).to(device)
     print(f"{count_parameters(model)/1e6:.2f} M parameters")
     print(f"Model is on device: {next(model.parameters()).device}")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-    total_steps = base_training_max_epochs * (len(train_data) // batch_size)
-    scheduler = get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps)
+
     scaler = GradScaler(enabled=torch.cuda.is_available())
     class ModelWrapper(nn.Module):
         def __init__(self, model):
@@ -139,7 +125,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 print(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
                 wait_for_keypress()
                 parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
-                parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
+                # parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
                 if not parquet_files:
                     print("No files present after keypress. Base training finished.")
                     break
@@ -165,7 +151,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 best_val_loss = float('inf')
                 file_dir = os.path.dirname(parquet_file)
                 file_name = os.path.basename(parquet_file)
-                train_data, val_data, _, _, _ = load_and_process_data(
+                train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
                     vocab_size=max_vocab_size,
                     parquet_dir_path=file_dir,
                     text_column=text_column,
@@ -173,6 +159,9 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     batch_size=batch_size,
                     single_file=file_name
                 )
+                # Set up learning rate scheduler for each file
+                total_steps = base_training_max_epochs * (len(train_data) // batch_size)
+                scheduler = get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps)
                 for iter in range(base_training_max_epochs):
                     if total_epochs_run >= global_max_epochs:
                         print(f"Reached global epoch limit of {global_max_epochs}. Stopping training.")
@@ -198,18 +187,23 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                             print("Restoring best model weights...")
                             model.load_state_dict(torch.load("data/output/best_model.pt"))
                             break
+                        print(f"[DEBUG] Writing train loss to TensorBoard: {losses['train']} at step {global_iter}")
                         writer.add_scalar('Loss/train', losses['train'], global_iter)
+                        print(f"[DEBUG] Writing val loss to TensorBoard: {losses['val']} at step {global_iter}")
                         writer.add_scalar('Loss/val', losses['val'], global_iter)
                         if torch.cuda.is_available():
+                            print(f"[DEBUG] Writing CUDA memory stats to TensorBoard at step {global_iter}")
                             writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
                             writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
                             writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
                         if global_iter % (eval_interval * 10) == 0:
+                            print(f"[DEBUG] Writing parameter histograms to TensorBoard at step {global_iter}")
                             for name, param in model.named_parameters():
                                 writer.add_histogram(f'Parameters/{name}', param, global_iter)
                                 if param.grad is not None:
                                     writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
                         if global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1):
+                            print(f"[DEBUG] Writing generated text to TensorBoard at step {global_iter}")
                             context = torch.zeros((1, 1), dtype=torch.long, device=device)
                             sample_text = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=1.0)[0].tolist())
                             writer.add_text('Generated Text 1.0 temp', sample_text, global_iter)
@@ -243,8 +237,9 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     train_time = time.time() - train_time
                     scheduler.step()
                     epoch_duration = time.time() - epoch_start_time
-                    # print(f"File {file_idx+1}, Epoch {iter}: Data time: {data_time:.4f}s, Train time: {train_time:.4f}s, Total epoch time: {epoch_duration:.4f}s")
+                    print(f"[DEBUG] Writing epoch duration to TensorBoard: {epoch_duration} at step {global_iter}")
                     writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
+                    print(f"[DEBUG] Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
                     writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
                     if iter % eval_interval == 0:
                         print(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
@@ -274,7 +269,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         print("Base training finished by user request.")
                         break
                 # Use poll_for_new_parquet_file to wait for a fully uploaded file
-                new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=2)
+                new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=4)
                 if new_file:
                     break
             if user_input == 'q':
@@ -286,7 +281,9 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     else:
         torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
         print("Model saved to data/output/model_checkpoint.pt")
-    writer.close()
+    if writer:
+        print("[DEBUG] Closing TensorBoard writer.")
+        writer.close()
 
 def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_size, val_split=0.1, tensorboard_logdir=None):
     model.train()
@@ -325,6 +322,7 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
             optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * inputs.size(0)
             if writer:
+                print(f"[DEBUG] Writing train loss to TensorBoard: {loss.item()} at step {global_step}")
                 writer.add_scalar('Loss/train', loss.item(), global_step)
             global_step += 1
             if batch_idx % 1000 == 0:
@@ -344,6 +342,7 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
                     logits, loss = model(inputs, targets)
                 val_loss += loss.item() * inputs.size(0)
                 if writer:
+                    print(f"[DEBUG] Writing val loss to TensorBoard: {loss.item()} at step {global_step}")
                     writer.add_scalar('Loss/val', loss.item(), global_step)
                 global_step += 1
                 if batch_idx % 250 == 0:
@@ -368,41 +367,3 @@ def train_chat_alignment(model, qa_tensor, epochs=1, lr=1e-4, batch_size=batch_s
             break
     torch.save(model.state_dict(), "data/output/chat_aligned_model.pt")
     print("Final chat-aligned model saved to data/output/chat_aligned_model.pt")
-
-
-def train_and_poll(parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', batch_size_files=1, training_start_time=None):
-    """
-    Polls for new parquet files, trains on each, deletes after training, then exits when no new files remain.
-    Allows user to quit by pressing 'q' and Enter while waiting for new files.
-    """
-    import sys
-    import select
-    import time
-    while True:
-        # Poll for a new, fully uploaded parquet file
-        print("Polling for new files. Press 'q' then Enter at any time to finish base training.")
-        while True:
-            # Non-blocking check for user input
-            print("Waiting for new files...", end='\r', flush=True)
-            if sys.stdin in select.select([sys.stdin], [], [], 5)[0]:
-                user_input = sys.stdin.readline().strip().lower()
-                if user_input == 'q':
-                    print("Base training finished by user request.")
-                    return
-            new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=2)
-            if new_file:
-                break
-        # Train on the single file
-        print(f"Training on file: {new_file}")
-        base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time)
-        print(f"Finished training on {new_file}")
-        # Delete the file after training
-        new_file_path = os.path.join(parquet_dir_path, new_file)
-        try:
-            os.remove(new_file_path)
-            print(f"Deleted file after training: {new_file_path}")
-        except Exception as e:
-            print(f"Error deleting file {new_file_path}: {e}")
-        # Wait a short time before polling again
-        time.sleep(2)
-    print("All files processed. Proceeding to fine-tuning.")

@@ -5,8 +5,12 @@ from subword_tokenizer import SubwordTokenizer
 from helpers import get_device
 from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
 from model import GPTLanguageModel
-from train_utils import base_train_model, train_chat_alignment, train_and_poll
+from train_utils import base_train_model, train_chat_alignment
 from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 if __name__ == "__main__":
     # Data paths

@@ -161,7 +161,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
             if text_column not in df.columns:
                 print(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
-            chunk_size_rows = 300  # Process 5 rows at a time
+            chunk_size_rows = 100  # Process 100 rows at a time
             print(f"Chunk size: {chunk_size_rows} rows")
             for i in range(0, len(df), chunk_size_rows):
                 end_idx = min(i + chunk_size_rows, len(df))
@@ -195,10 +195,10 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         print()
     if not chunk_tensors:
         raise ValueError("No tokens could be extracted from the first batch of files.")
-    print("Converting tokens to tensor...")
     gc.collect()
     torch.cuda.empty_cache()
     print_memory_usage()  # Print memory usage before tensor conversion
+    print("Converting tokens to tensor...")
     data = torch.cat(chunk_tensors)
     del chunk_tensors  # Free memory
     print_memory_usage()  # Print memory usage after tensor conversion
@@ -238,7 +238,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
             if text_column not in df.columns:
                 print(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
-            chunk_size_rows = 300  # Process 5 rows at a time
+            chunk_size_rows = 100  # Process 100 rows at a time
             for i in range(0, len(df), chunk_size_rows):
                 end_idx = min(i + chunk_size_rows, len(df))
                 chunk_df = df.iloc[i:end_idx]

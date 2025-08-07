@@ -1,9 +1,6 @@
 import torch
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-
 def get_device():
     if torch.cuda.is_available():
         logging.info("CUDA GPU will be used.")
@@ -16,7 +13,7 @@ def get_device():
         return torch.device("cpu")
         
 def print_memory_usage():
-    """Print percentage of RAM, GPU memory used, and disk usage for /workspace."""
+    """Print percentage of RAM, GPU memory used, and disk usage for current directory."""
     try:
         import psutil
         import os
@@ -45,12 +42,12 @@ def print_memory_usage():
     except Exception as e:
         logging.info(f"Error checking GPU usage: {e}")
 
-    # Disk usage for /workspace
+    # Disk usage for current directory
     try:
-        workspace_path = "/workspace"
-        usage = psutil.disk_usage(workspace_path)
+        current_path = os.getcwd()
+        usage = psutil.disk_usage(current_path)
         logging.info(
-            f"Disk usage for {workspace_path}: {usage.percent:.2f}% used "
+            f"Disk usage for {current_path}: {usage.percent:.2f}% used "
             f"({usage.used / (1024 ** 3):.2f} GiB used / {usage.total / (1024 ** 3):.2f} GiB total, "
             f"{usage.free / (1024 ** 3):.2f} GiB free)"
         )
