@@ -11,8 +11,11 @@ import datetime
 from helpers import print_memory_usage, wait_for_keypress, get_device, count_parameters
 from data_handler import get_batch, load_and_process_data, poll_for_new_parquet_file
 from model import GPTLanguageModel
-from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY
+from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY, LOG_LEVEL
 import logging
+
+# Configure logging
+logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
 
 # Hyperparameters (should be imported or passed in real use)
 batch_size = BATCH_SIZE
@@ -172,7 +175,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         logging.info("____________________________")
                         logging.debug("Memory usage before evaluation:")
                         print_memory_usage()
-                        logging.info(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                        logging.info(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, 📏 val loss {losses['val']:.4f}")
                         
                         # Save best model if val loss improves
                         if losses['val'] < best_val_loss:
@@ -256,33 +259,98 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     logging.info(f"Deleted file after training: {parquet_file}")
                 except Exception as e:
                     logging.info(f"Error deleting file {parquet_file}: {e}")
-            logging.info("\nAll files in folder processed. Waiting for new files... (Press 'q' then Enter to finish base training)\n")
-            # Poll for new files, but allow user to quit by pressing 'q' and Enter
-            import sys
-            import select
-            logging.info("Polling for new files. Press 'q' then Enter at any time to finish base training.")
-            user_input = None  # Fix: ensure user_input is always defined
+            logging.info("\nAll files in folder processed. Waiting for new files...\n")
+            logging.info("=" * 60)
+            logging.info("WAITING FOR NEW FILES OR USER INPUT")
+            logging.info("=" * 60)
+            logging.info("Options:")
+            logging.info("1. Add new .parquet files to continue training")
+            logging.info("2. Create a file named 'STOP_TRAINING' in the data/output/ folder to stop")
+            logging.info("   Command: touch data/output/STOP_TRAINING")
+            logging.info("=" * 60)
+            
+            stop_file_path = "data/output/STOP_TRAINING"
+            # Remove any existing stop file at the start
+            if os.path.exists(stop_file_path):
+                os.remove(stop_file_path)
+            
+            stop_file_path = "data/output/STOP_TRAINING"
+            # Remove any existing stop file at the start
+            if os.path.exists(stop_file_path):
+                os.remove(stop_file_path)
+            
+            user_interrupted = False
+            check_counter = 0
+            
+            # Keep track of files we've already seen to detect new ones
+            import glob
+            seen_files = set(os.path.basename(f) for f in glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+            
             while True:
-                # Check for user input (non-blocking)
-                logging.debug("Waiting for new files...")
-                if sys.stdin in select.select([sys.stdin], [], [], 5)[0]:
-                    user_input = sys.stdin.readline().strip().lower()
-                    if user_input == 'q':
-                        logging.info("Base training finished by user request.")
-                        break
-                # Use poll_for_new_parquet_file to wait for a fully uploaded file
-                new_file = poll_for_new_parquet_file(parquet_dir_path, poll_interval=4)
-                if new_file:
+                # Check for stop file FIRST and FREQUENTLY (every iteration)
+                if os.path.exists(stop_file_path):
+                    logging.info(f"\n🛑 Stop file detected: {stop_file_path}")
+                    logging.info("User requested to stop base training.")
+                    logging.info("Removing stop file and proceeding to save model...")
+                    os.remove(stop_file_path)  # Clean up
+                    user_interrupted = True
                     break
-            if user_input == 'q':
+                
+                # Check for new files manually (non-blocking)
+                current_files = set(f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet'))
+                new_files = current_files - seen_files
+                
+                if new_files:
+                    # Check if any new file is fully uploaded
+                    for file in new_files:
+                        file_path = os.path.join(parquet_dir_path, file)
+                        # Simple check - file exists and has some size
+                        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                            logging.info(f"New file detected: {file}")
+                            logging.info("Resuming training with new file...")
+                            seen_files.add(file)  # Mark as seen
+                            user_interrupted = False  # Found a file, continue training
+                            break
+                    
+                    if not user_interrupted:  # If we found a file, break out of waiting loop
+                        break
+                
+                # Show periodic status (less frequent to reduce spam)
+                if check_counter % 5 == 0:
+                    logging.info("Still waiting... (Create 'data/output/STOP_TRAINING' file to stop)")
+                
+                check_counter += 1
+                time.sleep(1)  # Short sleep, check stop file every second
+            
+            if user_interrupted:
                 break
-    except KeyboardInterrupt:
-        logging.info("\nTraining interrupted by user. Saving model checkpoint...")
-        torch.save(model.state_dict(), "data/output/model_interrupted.pt")
-        logging.info("Model saved to data/output/model_interrupted.pt")
+    except Exception as e:
+        # Handle any other exceptions (but not KeyboardInterrupt)
+        logging.error(f"An error occurred during training: {e}")
+        torch.save(model.state_dict(), "data/output/model_error.pt")
+        logging.info("Model saved to data/output/model_error.pt due to error")
     else:
+        # Normal completion
         torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
         logging.info("Model saved to data/output/model_checkpoint.pt")
+    
+    # Always ensure we have a checkpoint for the next phase
+    if not os.path.exists("data/output/model_checkpoint.pt"):
+        if os.path.exists("data/output/best_model.pt"):
+            # Copy best model as checkpoint for fine-tuning
+            import shutil
+            shutil.copy("data/output/best_model.pt", "data/output/model_checkpoint.pt")
+            logging.info("Copied best model as checkpoint for fine-tuning.")
+        elif os.path.exists("data/output/model_error.pt"):
+            # Copy error model as last resort
+            import shutil
+            shutil.copy("data/output/model_error.pt", "data/output/model_checkpoint.pt")
+            logging.info("Copied error model as checkpoint for fine-tuning.")
+        else:
+            # Save current state
+            torch.save(model.state_dict(), "data/output/model_checkpoint.pt")
+            logging.info("Saved current model state as checkpoint for fine-tuning.")
+    
     if writer:
         logging.debug("[DEBUG] Closing TensorBoard writer.")
         writer.close()

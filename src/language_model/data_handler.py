@@ -7,6 +7,10 @@ import datetime
 import gc
 import time
 import logging
+from config import LOG_LEVEL
+
+# Configure logging
+logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
 
 device = get_device()
 

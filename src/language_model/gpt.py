@@ -1,16 +1,16 @@
 import torch
-import os
 import datetime
+import os
 from subword_tokenizer import SubwordTokenizer
 from helpers import get_device
 from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
 from model import GPTLanguageModel
 from train_utils import base_train_model, train_chat_alignment
-from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH
+from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
 
 if __name__ == "__main__":
     # Data paths
@@ -50,8 +50,30 @@ if __name__ == "__main__":
     # Load pre-trained model
     device = get_device()
     model = GPTLanguageModel(vocab_size).to(device)
-    model.load_state_dict(torch.load('data/output/model_checkpoint.pt', map_location=device))
-    logging.info('Pre-trained model loaded.')
+    
+    # Try to load the best available model for fine-tuning
+    model_loaded = False
+    model_paths_to_try = [
+        'data/output/model_checkpoint.pt',
+        'data/output/best_model.pt',
+        'data/output/model_error.pt'
+    ]
+    
+    for model_path in model_paths_to_try:
+        if os.path.exists(model_path):
+            try:
+                model.load_state_dict(torch.load(model_path, map_location=device))
+                logging.info(f'Pre-trained model loaded from {model_path}')
+                model_loaded = True
+                break
+            except Exception as e:
+                logging.warning(f'Failed to load model from {model_path}: {e}')
+                continue
+    
+    if not model_loaded:
+        logging.warning('No pre-trained model found. Starting fine-tuning with randomly initialized model.')
+    
+    logging.info('Model ready for fine-tuning.')
     
     # Fine-tune on QA pairs
     logging.info("\n=== Starting fine-tuning on QA pairs ===")

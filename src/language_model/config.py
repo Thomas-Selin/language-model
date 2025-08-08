@@ -1,5 +1,8 @@
 # Configuration file for all hyperparameters and paths
 
+# General settings
+LOG_LEVEL = "DEBUG"  # Set to "INFO" or "DEBUG" as needed
+
 # Data paths
 PARQUET_DIR_PATH = 'data/input/parquet_files'
 TEXT_COLUMN = 'text'
