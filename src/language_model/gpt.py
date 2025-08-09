@@ -10,9 +10,14 @@ from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, C
 import logging
 
 # Configure logging
-logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format='\033[95m[%(levelname)s]\033[0m %(message)s'
+)
 
 if __name__ == "__main__":
+    training_start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir = os.path.join('data', 'output', training_start_time)
     # Data paths
     parquet_dir_path = PARQUET_DIR_PATH
     text_column = TEXT_COLUMN
@@ -27,12 +32,9 @@ if __name__ == "__main__":
     logging.info(f"Context data extracted to {context_parquet_path}")
     logging.info("This file should be included in base training at the end by moving it to the parquet_files directory.")
 
-    # Get current time for logging
-    training_start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
     # Base training - now uses train_and_poll for polling and deletion
     logging.info("\n=== Starting base training with polling and auto-deletion ===")
-    base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time)
+    base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time, output_dir=output_dir)
 
     # Now process QA dataset for fine-tuning
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
@@ -54,16 +56,16 @@ if __name__ == "__main__":
     # Try to load the best available model for fine-tuning
     model_loaded = False
     model_paths_to_try = [
-        'data/output/model_checkpoint.pt',
-        'data/output/best_model.pt',
-        'data/output/model_error.pt'
+        os.path.join(output_dir, 'model_checkpoint.pt'),
+        os.path.join(output_dir, 'best_model.pt'),
+        os.path.join(output_dir, 'model_error.pt')
     ]
     
     for model_path in model_paths_to_try:
         if os.path.exists(model_path):
             try:
                 model.load_state_dict(torch.load(model_path, map_location=device))
-                logging.info(f'Pre-trained model loaded from {model_path}')
+                logging.info(f'\033[92mPre-trained model loaded from {model_path}\033[0m')
                 model_loaded = True
                 break
             except Exception as e:
@@ -77,14 +79,14 @@ if __name__ == "__main__":
     
     # Fine-tune on QA pairs
     logging.info("\n=== Starting fine-tuning on QA pairs ===")
-    qa_logdir = f'data/output/tensorboard_logs/{training_start_time}'
+    qa_logdir = os.path.join(output_dir, 'tensorboard_logs')
     train_chat_alignment(
         model, 
-        qa_tensor, 
-        epochs=10, 
+        qa_tensor,
         lr=1e-4, 
         batch_size=4, 
         val_split=0.1, 
-        tensorboard_logdir=qa_logdir
+        tensorboard_logdir=qa_logdir,
+        output_dir=output_dir
     )
     logging.info("Fine-tuning complete. Model ready for use.")

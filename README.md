@@ -14,6 +14,13 @@ Specify which collumns are used in each dataset
 
 Finallly chat alignment fine tuning was done using....
 
+Recommend the use of tmux
+
+Describe training process, incl. gpu
+
+Created in the course ...
+
+# Scripts for training. sync, upload, stop etc.
 
 
 ## How to run

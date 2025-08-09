@@ -5,7 +5,10 @@ from typing import List
 from config import LOG_LEVEL
 
 # Configure logging
-logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format='\033[95m[%(levelname)s]\033[0m %(message)s'
+)
 
 def create_bpe_tokenizer(text_files, vocab_size=3000):
     """Create a BPE tokenizer trained on the given text files"""

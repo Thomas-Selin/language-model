@@ -3,7 +3,10 @@ import logging
 from config import LOG_LEVEL
 
 # Configure logging
-logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format='\033[95m[%(levelname)s]\033[0m %(message)s'
+)
 
 def get_device():
     if torch.cuda.is_available():

@@ -10,7 +10,10 @@ import logging
 from config import LOG_LEVEL
 
 # Configure logging
-logging.basicConfig(level=LOG_LEVEL, format='%(message)s')
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format='\033[95m[%(levelname)s]\033[0m %(message)s'
+)
 
 device = get_device()
 
@@ -153,41 +156,49 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
     for file_idx, file in enumerate(first_batch):
         file_path = os.path.join(parquet_dir_path, file)
         logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
-        try:
-            df = pd.read_parquet(file_path)
-            if text_column not in df.columns:
-                logging.info(f"Warning: Column '{text_column}' not found in {file}, skipping")
-                continue
-            chunk_size_rows = 100  # Process 100 rows at a time
-            logging.debug(f"Chunk size: {chunk_size_rows} rows")
-            for i in range(0, len(df), chunk_size_rows):
-                end_idx = min(i + chunk_size_rows, len(df))
-                chunk_df = df.iloc[i:end_idx]
-                chunk_text = ' '.join(chunk_df[text_column].fillna('').astype(str).tolist())
-                if chunk_text:
-                    chunk_tokens = tokenizer.encode(chunk_text)
-                    chunk_tensor = torch.tensor(chunk_tokens, dtype=torch.long, device='cpu')
-                    chunk_tensors.append(chunk_tensor)
-                del chunk_text
-                del chunk_df
-                # Update progress bar every 100 chunks
-                if (i // chunk_size_rows) % 100 == 0:
-                    percent_done = end_idx / len(df) * 100
-                    bar_length = 20
-                    filled_length = int(bar_length * end_idx // len(df))
-                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                    print(f"\r  Processing {file}: [{bar}] {percent_done:.1f}%", end='', flush=True)
-                    
-                    # Add explicit garbage collection periodically
-                    if (i // chunk_size_rows) % 50 == 0:
-                        gc.collect()
-            del df
-            # Perform garbage collection after each file
-            gc.collect()
-            if (file_idx + 1) % 3 == 0:
-                print_memory_usage()
-        except Exception as e:
-            logging.info(f"Error processing file {file}: {e}")
+        max_retries = 3
+        retry_count = 0
+        while retry_count <= max_retries:
+            try:
+                df = pd.read_parquet(file_path)
+                if text_column not in df.columns:
+                    logging.info(f"Warning: Column '{text_column}' not found in {file}, skipping")
+                    break
+                chunk_size_rows = 100  # Process 100 rows at a time
+                logging.debug(f"Chunk size: {chunk_size_rows} rows")
+                for i in range(0, len(df), chunk_size_rows):
+                    end_idx = min(i + chunk_size_rows, len(df))
+                    chunk_df = df.iloc[i:end_idx]
+                    chunk_text = ' '.join(chunk_df[text_column].fillna('').astype(str).tolist())
+                    if chunk_text:
+                        chunk_tokens = tokenizer.encode(chunk_text)
+                        chunk_tensor = torch.tensor(chunk_tokens, dtype=torch.long, device='cpu')
+                        chunk_tensors.append(chunk_tensor)
+                    del chunk_text
+                    del chunk_df
+                    # Update progress bar every 100 chunks
+                    if (i // chunk_size_rows) % 100 == 0:
+                        percent_done = end_idx / len(df) * 100
+                        bar_length = 20
+                        filled_length = int(bar_length * end_idx // len(df))
+                        bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                        print(f"\r  Processing {file}: [{bar}] {percent_done:.1f}%", end='', flush=True)
+                        if (i // chunk_size_rows) % 50 == 0:
+                            gc.collect()
+                print("\n")
+                del df
+                gc.collect()
+                if (file_idx + 1) % 3 == 0:
+                    print_memory_usage()
+                break  # Success, exit retry loop
+            except Exception as e:
+                retry_count += 1
+                logging.info(f"Error processing file {file} at {datetime.datetime.now().strftime('%H:%M:%S')}: {e}")
+                if retry_count > max_retries:
+                    logging.info(f"Max retries reached for file {file}, skipping.")
+                    break
+                logging.info(f"Retrying file {file} in 10 minutes (attempt {retry_count}/{max_retries})...")
+                time.sleep(600)  # Wait 10 minutes before retry
         logging.info("")
     if not chunk_tensors:
         raise ValueError("No tokens could be extracted from the first batch of files.")
@@ -260,7 +271,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
             if (file_idx + 1) % 3 == 0:
                 print_memory_usage()
         except Exception as e:
-            logging.info(f"Error processing file {file}: {e}")
+            logging.info(f"Error processing file {file} at {datetime.datetime.now().strftime('%H:%M:%S')}: {e}")
     if not chunk_tensors:
         logging.info("Warning: No tokens could be extracted from this batch of files.")
         return train_data, val_data
