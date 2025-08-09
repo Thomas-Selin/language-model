@@ -11,7 +11,7 @@ import datetime
 from helpers import print_memory_usage, wait_for_keypress, get_device, count_parameters
 from data_handler import get_batch, load_and_process_data, poll_for_new_parquet_file
 from model import GPTLanguageModel
-from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY, LOG_LEVEL
+from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY, LOG_LEVEL, FINETUNE_EARLY_STOPPING_PATIENCE
 import logging
 
 # Configure logging
@@ -169,9 +169,11 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     batch_size=batch_size,
                     single_file=file_name
                 )
-                # Set up learning rate scheduler for each file
-                total_steps = base_training_max_epochs * (len(train_data) // batch_size)
-                scheduler = get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps)
+                # Set up LR scheduler for each file.
+                # One optimizer step per loop iteration, so steps_per_file == base_training_max_epochs.
+                steps_per_file = base_training_max_epochs
+                warmup_steps_local = max(1, int(0.02 * steps_per_file))  # ~1–2% warmup
+                scheduler = get_lr_scheduler(optimizer, warmup_steps_local, lr_decay, steps_per_file)
                 for iter in range(base_training_max_epochs):
                     if total_epochs_run >= global_max_epochs:
                         logging.info(f"Reached global epoch limit of {global_max_epochs}. Stopping training.")
@@ -203,6 +205,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                             logging.debug(f"Writing metrics and generated text to TensorBoard at step {global_iter}")
                             writer.add_scalar('Loss/train', losses['train'], global_iter)
                             writer.add_scalar('Loss/val', losses['val'], global_iter)
+                            writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'])), global_iter)
+                            writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'])), global_iter)
                             if torch.cuda.is_available():
                                 writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
                                 writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
@@ -343,7 +347,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         break
                 
                 # Show periodic status (less frequent to reduce spam)
-                if check_counter % 5 == 0:
+                if check_counter % 100 == 0:
                     logging.debug("Still waiting... (Create 'data/output/STOP_TRAINING' file to stop)")
                 
                 check_counter += 1
@@ -393,9 +397,15 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
     split_idx = int((1.0 - val_split) * num_samples)
     train_tensor = qa_tensor[:split_idx]
     val_tensor = qa_tensor[split_idx:]
+
+    # Steps = optimizer updates (batches) over the whole run
     total_steps = epochs * ((train_tensor.size(0) + batch_size - 1) // batch_size)
+    warmup_steps = max(10, min(200, int(0.02 * total_steps)))  # ~2% with floor=10, cap=200
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    scheduler = get_lr_scheduler(optimizer, warmup_steps=100, lr_decay="cosine", total_steps=total_steps)
+    scheduler = get_lr_scheduler(optimizer, warmup_steps=warmup_steps, lr_decay="cosine", total_steps=total_steps)
+    patience = FINETUNE_EARLY_STOPPING_PATIENCE
+    logging.info(f"Chat alignment: total_steps={total_steps}, warmup_steps={warmup_steps}, patience={patience}")
     scaler = GradScaler(enabled=torch.cuda.is_available())
     global_step = 0
     best_val_loss = float('inf')
@@ -417,6 +427,9 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
             with autocast(device_type=device.type):
                 logits, loss = model(inputs, targets)
             scaler.scale(loss).backward()
+            # safe gradient clipping for SFT
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scheduler.step()
             scaler.update()
@@ -452,20 +465,14 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
         avg_val_loss = val_loss / val_tensor.size(0)
         logging.info(f"Epoch {epoch+1} VALIDATION DONE. Avg Val Loss: {avg_val_loss:.4f}")
 
-        # Save best model if val loss improves
         if avg_val_loss < best_val_loss:
-            logging.info(f"Validation loss improved ({avg_val_loss:.4f} < {best_val_loss:.4f}). Saving best model.")
             best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), os.path.join(output_dir, "chat_aligned_best_model.pt"))
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
-            logging.info(f"Epochs without improvement: {epochs_without_improvement}")
 
-        if epochs_without_improvement >= early_stopping_patience:
-            logging.info(f"Early stopping triggered at epoch {epoch+1}. Best val loss: {best_val_loss:.4f}")
-            logging.info("Restoring best model weights...")
-            model.load_state_dict(torch.load(os.path.join(output_dir, "chat_aligned_best_model.pt")))
+        if epochs_without_improvement >= patience:
+            logging.info("Early stopping triggered for chat alignment.")
             break
     torch.save(model.state_dict(), os.path.join(output_dir, "chat_aligned_model.pt"))
     logging.info("Final chat-aligned model saved to data/output/chat_aligned_model.pt")

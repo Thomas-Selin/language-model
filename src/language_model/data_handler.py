@@ -85,150 +85,139 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         total_batches += 1
     
     logging.info(f"Will process files in {total_batches} batches of up to {batch_size} files each")
-    first_batch = all_parquet_files[:batch_size]
-    logging.info(f"Processing first batch of {len(first_batch)} files...")
+    
     # Only build vocab if it doesn't exist
-    if not os.path.exists(tokenizer_path):
-        logging.info("Need to build vocabulary with subword tokenizer...")
-        # Collect text samples for vocab building (use less memory)
-        # We don't need the full text for building vocabulary, just representative samples
-        sample_texts = []
-        sample_size = 10000000  # TODO: Limit sample size per file to save memory
-        total_samples = 0
-        
-        for file in first_batch:
+    first_batch_idx = 0
+    tokenizer_built = os.path.exists(tokenizer_path)
+    while first_batch_idx < total_batches:
+        first_batch = all_parquet_files[first_batch_idx*batch_size:(first_batch_idx+1)*batch_size]
+        logging.info(f"Processing batch {first_batch_idx+1} of {total_batches}, {len(first_batch)} files...")
+        skipped_files = []
+        # Build vocab if needed
+        if not tokenizer_built:
+            logging.info("Need to build vocabulary with subword tokenizer...")
+            sample_texts = []
+            sample_size = 1000000
+            total_samples = 0
+            for file in first_batch:
+                file_path = os.path.join(parquet_dir_path, file)
+                try:
+                    df = pd.read_parquet(file_path)
+                    if text_column not in df.columns:
+                        logging.info(f"Warning: Column '{text_column}' not found in {file}")
+                        skipped_files.append(file)
+                        continue
+                    if len(df) > 100:
+                        df_sample = df.sample(min(100, len(df)))
+                    else:
+                        df_sample = df
+                    texts = df_sample[text_column].fillna('').astype(str).tolist()
+                    text_sample = ' '.join(texts)
+                    if len(text_sample) > sample_size:
+                        text_sample = text_sample[:sample_size]
+                    sample_texts.append(text_sample)
+                    total_samples += len(text_sample)
+                    logging.debug(f"Added {len(text_sample)} chars from {file} for vocabulary building")
+                    if total_samples >= 30000000:
+                        break
+                except Exception as e:
+                    logging.info(f"Error sampling file {file} for vocab: {e}")
+                    skipped_files.append(file)
+            if not sample_texts:
+                logging.info(f"All files in batch {first_batch_idx+1} were skipped for vocab building: {skipped_files}")
+                first_batch_idx += 1
+                continue
+            combined_samples = ' '.join(sample_texts)
+            logging.info(f"Building vocabulary from {len(combined_samples)} characters of sample text...")
+            tokenizer_obj = SubwordTokenizer.build_vocab(combined_samples, vocab_size=vocab_size)
+            logging.info(f"Vocabulary built successfully. Size: {tokenizer_obj.get_vocab_size()}")
+            SubwordTokenizer.save_vocab(tokenizer_obj, path=tokenizer_path)
+            del sample_texts
+            del combined_samples
+            tokenizer_built = True
+        else:
+            logging.info("Using existing subword vocabulary...")
+        tokenizer = SubwordTokenizer(vocab_file=tokenizer_path)
+        vocab_size = tokenizer.get_vocab_size()
+        logging.info(f"Vocabulary loaded. Size: {vocab_size}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}")
+        logging.debug("Processing batch files one by one...")
+        print_memory_usage()
+        chunk_tensors = []
+        skipped_files = []
+        for file_idx, file in enumerate(first_batch):
             file_path = os.path.join(parquet_dir_path, file)
-            try:
-                # Read the parquet file but only load what we need for the sample
-                df = pd.read_parquet(file_path)
-                if text_column not in df.columns:
-                    logging.info(f"Warning: Column '{text_column}' not found in {file}")
-                    continue
-                
-                # Take a sample of rows instead of all rows
-                if len(df) > 100:
-                    df_sample = df.sample(min(100, len(df)))
-                else:
-                    df_sample = df
-                
-                texts = df_sample[text_column].fillna('').astype(str).tolist()
-                text_sample = ' '.join(texts)
-                
-                # Limit sample size
-                if len(text_sample) > sample_size:
-                    text_sample = text_sample[:sample_size]
-                
-                sample_texts.append(text_sample)
-                total_samples += len(text_sample)
-                logging.debug(f"Added {len(text_sample)} chars from {file} for vocabulary building")
-                
-                # If we have enough samples, stop collecting
-                if total_samples >= 50000000: # TODO
+            logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
+            max_retries = 30
+            retry_count = 0
+            while retry_count <= max_retries:
+                try:
+                    df = pd.read_parquet(file_path)
+                    if text_column not in df.columns:
+                        logging.info(f"Warning: Column '{text_column}' not found in {file}, skipping")
+                        skipped_files.append(file)
+                        break
+                    chunk_size_rows = 100
+                    logging.debug(f"Chunk size: {chunk_size_rows} rows")
+                    for i in range(0, len(df), chunk_size_rows):
+                        end_idx = min(i + chunk_size_rows, len(df))
+                        chunk_df = df.iloc[i:end_idx]
+                        chunk_text = ' '.join(chunk_df[text_column].fillna('').astype(str).tolist())
+                        if chunk_text:
+                            chunk_tokens = tokenizer.encode(chunk_text)
+                            chunk_tensor = torch.tensor(chunk_tokens, dtype=torch.long, device='cpu')
+                            chunk_tensors.append(chunk_tensor)
+                        del chunk_text
+                        del chunk_df
+                        if (i // chunk_size_rows) % 100 == 0:
+                            percent_done = end_idx / len(df) * 100
+                            bar_length = 20
+                            filled_length = int(bar_length * end_idx // len(df))
+                            bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                            print(f"\r  Processing {file}: [{bar}] {percent_done:.1f}%", end='', flush=True)
+                            if (i // chunk_size_rows) % 50 == 0:
+                                gc.collect()
+                    print("\n")
+                    del df
+                    gc.collect()
+                    if (file_idx + 1) % 3 == 0:
+                        print_memory_usage()
                     break
-                    
-            except Exception as e:
-                logging.info(f"Error sampling file {file} for vocab: {e}")
-        
-        if not sample_texts:
-            raise ValueError("No data could be loaded from first batch of files for vocabulary building.")
-        
-        # Combine samples
-        combined_samples = ' '.join(sample_texts)
-        logging.info(f"Building vocabulary from {len(combined_samples)} characters of sample text...")
-        
-        # Build vocab
-        tokenizer_obj = SubwordTokenizer.build_vocab(combined_samples, vocab_size=vocab_size)
-        logging.info(f"Vocabulary built successfully. Size: {tokenizer_obj.get_vocab_size()}")
-        SubwordTokenizer.save_vocab(tokenizer_obj, path=tokenizer_path)
-        
-        # Free memory
-        del sample_texts
-        del combined_samples
-    else:
-        logging.info("Using existing subword vocabulary...")
-    # Load tokenizer from saved file
-    tokenizer = SubwordTokenizer(vocab_file=tokenizer_path)
-    vocab_size = tokenizer.get_vocab_size()
-    logging.info(f"Vocabulary loaded. Size: {vocab_size}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}")
-    logging.debug("Processing first batch files one by one...")
-    print_memory_usage()  # Print memory usage before processing
-    chunk_tensors = []
-    for file_idx, file in enumerate(first_batch):
-        file_path = os.path.join(parquet_dir_path, file)
-        logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
-        max_retries = 3
-        retry_count = 0
-        while retry_count <= max_retries:
-            try:
-                df = pd.read_parquet(file_path)
-                if text_column not in df.columns:
-                    logging.info(f"Warning: Column '{text_column}' not found in {file}, skipping")
-                    break
-                chunk_size_rows = 100  # Process 100 rows at a time
-                logging.debug(f"Chunk size: {chunk_size_rows} rows")
-                for i in range(0, len(df), chunk_size_rows):
-                    end_idx = min(i + chunk_size_rows, len(df))
-                    chunk_df = df.iloc[i:end_idx]
-                    chunk_text = ' '.join(chunk_df[text_column].fillna('').astype(str).tolist())
-                    if chunk_text:
-                        chunk_tokens = tokenizer.encode(chunk_text)
-                        chunk_tensor = torch.tensor(chunk_tokens, dtype=torch.long, device='cpu')
-                        chunk_tensors.append(chunk_tensor)
-                    del chunk_text
-                    del chunk_df
-                    # Update progress bar every 100 chunks
-                    if (i // chunk_size_rows) % 100 == 0:
-                        percent_done = end_idx / len(df) * 100
-                        bar_length = 20
-                        filled_length = int(bar_length * end_idx // len(df))
-                        bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                        print(f"\r  Processing {file}: [{bar}] {percent_done:.1f}%", end='', flush=True)
-                        if (i // chunk_size_rows) % 50 == 0:
-                            gc.collect()
-                print("\n")
-                del df
-                gc.collect()
-                if (file_idx + 1) % 3 == 0:
-                    print_memory_usage()
-                break  # Success, exit retry loop
-            except Exception as e:
-                retry_count += 1
-                logging.info(f"Error processing file {file} at {datetime.datetime.now().strftime('%H:%M:%S')}: {e}")
-                if retry_count > max_retries:
-                    logging.info(f"Max retries reached for file {file}, skipping.")
-                    break
-                logging.info(f"Retrying file {file} in 10 minutes (attempt {retry_count}/{max_retries})...")
-                time.sleep(600)  # Wait 10 minutes before retry
-        logging.info("")
-    if not chunk_tensors:
-        raise ValueError("No tokens could be extracted from the first batch of files.")
-    gc.collect()
-    torch.cuda.empty_cache()
-    print_memory_usage()  # Print memory usage before tensor conversion
-    logging.info("Converting tokens to tensor...")
-    data = torch.cat(chunk_tensors)
-    del chunk_tensors  # Free memory
-    print_memory_usage()  # Print memory usage after tensor conversion
-    logging.info(f"First batch encoded. Length: {len(data)}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}")
-    
-    # Split into train and validation sets
-    n = int(0.9*len(data))  # first 90% will be train, rest val
-    train_data = data[:n]
-    val_data = data[n:]
-    
-    # Free memory
-    del data
-    print_memory_usage()  # Final memory check
-    
-    # If single_file, no remaining batches
-    if single_file is not None:
-        remaining_batches = []
-        logging.debug(f"Remaining batches for single file {single_file}: {remaining_batches}")
-    else:
-        remaining_batches = [all_parquet_files[i:i+batch_size] for i in range(batch_size, len(all_parquet_files), batch_size)]
-    
-    # Return the first batch data, the remaining file batches, and tokenizer info
-    return train_data, val_data, tokenizer, vocab_size, remaining_batches
+                except Exception as e:
+                    retry_count += 1
+                    logging.info(f"Error processing file {file} at {datetime.datetime.now().strftime('%H:%M:%S')}: {e}")
+                    if retry_count > max_retries:
+                        logging.info(f"Max retries reached for file {file}, skipping.")
+                        skipped_files.append(file)
+                        break
+                    logging.info(f"Retrying file {file} in 5 minutes (attempt {retry_count}/{max_retries})...")
+                    time.sleep(300)
+            logging.info("")
+        if not chunk_tensors:
+            logging.info(f"No tokens could be extracted from batch {first_batch_idx+1}. Skipped files: {skipped_files}")
+            first_batch_idx += 1
+            continue
+        if skipped_files:
+            logging.info(f"Skipped files in batch {first_batch_idx+1}: {skipped_files}")
+        gc.collect()
+        torch.cuda.empty_cache()
+        print_memory_usage()
+        logging.info("Converting tokens to tensor...")
+        data = torch.cat(chunk_tensors)
+        del chunk_tensors
+        print_memory_usage()
+        logging.info(f"Batch {first_batch_idx+1} encoded. Length: {len(data)}. Current time is {datetime.datetime.now().strftime('%H:%M:%S')}")
+        n = int(0.9*len(data))
+        train_data = data[:n]
+        val_data = data[n:]
+        del data
+        print_memory_usage()
+        if single_file is not None:
+            remaining_batches = []
+            logging.debug(f"Remaining batches for single file {single_file}: {remaining_batches}")
+        else:
+            remaining_batches = [all_parquet_files[i:i+batch_size] for i in range((first_batch_idx+1)*batch_size, len(all_parquet_files), batch_size)]
+        return train_data, val_data, tokenizer, vocab_size, remaining_batches
+    raise ValueError("No tokens could be extracted from any batch of files.")
 
 def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train_data, val_data):
     """Load and process the next batch of parquet files"""
