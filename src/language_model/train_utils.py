@@ -289,8 +289,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             # Keep track of files we've already seen to detect new ones
             import glob
             seen_files = set(os.path.basename(f) for f in glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
-            # Require at least 8 MB and stable size across consecutive checks
-            MIN_FILE_SIZE_BYTES = 8 * 1024 * 1024  # 8 MB
+            # Require at least 200 Kb and stable size across consecutive checks
+            MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
             size_state = {}  # file -> (last_size, stable_count)
             trained_files = set()  # Files that have been used for training
 
@@ -323,7 +323,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
 
                         if curr_size >= MIN_FILE_SIZE_BYTES and prev_size is not None and curr_size == prev_size:
                             stable_count += 1  # one more stable check
-                            logging.debug(f"File '{file}' size is stable and >=8 MB ({curr_size/1024/1024:.2f} MB). Stable count: {stable_count}/30")
+                            logging.debug(f"File '{file}' size is stable and >=200 KB ({curr_size/1024/1024:.2f} MB). Stable count: {stable_count}/30")
                         else:
                             if curr_size < MIN_FILE_SIZE_BYTES:
                                 logging.debug(f"File '{file}' is too small ({curr_size/1024/1024:.2f} MB). Waiting for upload to finish.")
@@ -337,7 +337,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
 
                         # Require N consecutive stable checks (e.g., 30 loops ≈ 30 seconds)
                         if stable_count >= 30:
-                            logging.info(f"New file detected and size stabilized (>=8 MB): {file} ({curr_size/1024/1024:.1f} MB)")
+                            logging.info(f"New file detected and size stabilized (>=200 KB): {file} ({curr_size/1024/1024:.1f} MB)")
                             logging.info(f"File '{file}' appears to have finished uploading. Resuming training with new file...")
                             trained_files.add(file)  # Mark as trained AFTER processing
                             ready_file_found = True

@@ -96,10 +96,17 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         # Build vocab if needed
         if not tokenizer_built:
             logging.info("Need to build vocabulary with subword tokenizer...")
+            import random
             sample_texts = []
-            sample_size = 1000000
-            total_samples = 0
-            for file in first_batch:
+
+            PER_FILE_CHAR_CAP = 1_000_000          # ~1M chars max from any single file
+            TOTAL_VOCAB_SAMPLE_CHARS = 20_000_000  # target total chars across files (10–20M is plenty)
+
+            files_for_vocab = list(all_parquet_files)  # sample from the entire corpus, not just the first batch
+            random.shuffle(files_for_vocab)
+
+            total_chars = 0
+            for file in files_for_vocab:
                 file_path = os.path.join(parquet_dir_path, file)
                 try:
                     df = pd.read_parquet(file_path)
@@ -107,33 +114,32 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         logging.info(f"Warning: Column '{text_column}' not found in {file}")
                         skipped_files.append(file)
                         continue
-                    if len(df) > 100:
-                        df_sample = df.sample(min(100, len(df)))
-                    else:
-                        df_sample = df
+                    # small, cheap per-file row sample; increase if rows are very short
+                    df_sample = df.sample(min(100, len(df))) if len(df) > 100 else df
                     texts = df_sample[text_column].fillna('').astype(str).tolist()
                     text_sample = ' '.join(texts)
-                    if len(text_sample) > sample_size:
-                        text_sample = text_sample[:sample_size]
+                    if len(text_sample) > PER_FILE_CHAR_CAP:
+                        text_sample = text_sample[:PER_FILE_CHAR_CAP]
                     sample_texts.append(text_sample)
-                    total_samples += len(text_sample)
-                    logging.debug(f"Added {len(text_sample)} chars from {file} for vocabulary building")
-                    if total_samples >= 30000000:
+                    total_chars += len(text_sample)
+                    logging.debug(f"Added {len(text_sample)} chars from {file} (total {total_chars})")
+                    if total_chars >= TOTAL_VOCAB_SAMPLE_CHARS:
                         break
                 except Exception as e:
                     logging.info(f"Error sampling file {file} for vocab: {e}")
                     skipped_files.append(file)
+
             if not sample_texts:
-                logging.info(f"All files in batch {first_batch_idx+1} were skipped for vocab building: {skipped_files}")
+                logging.info(f"No data available to build vocabulary. Skipped files: {skipped_files}")
                 first_batch_idx += 1
                 continue
+
             combined_samples = ' '.join(sample_texts)
             logging.info(f"Building vocabulary from {len(combined_samples)} characters of sample text...")
             tokenizer_obj = SubwordTokenizer.build_vocab(combined_samples, vocab_size=vocab_size)
             logging.info(f"Vocabulary built successfully. Size: {tokenizer_obj.get_vocab_size()}")
             SubwordTokenizer.save_vocab(tokenizer_obj, path=tokenizer_path)
-            del sample_texts
-            del combined_samples
+            del sample_texts, combined_samples
             tokenizer_built = True
         else:
             logging.info("Using existing subword vocabulary...")
@@ -189,8 +195,8 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         logging.info(f"Max retries reached for file {file}, skipping.")
                         skipped_files.append(file)
                         break
-                    logging.info(f"Retrying file {file} in 5 minutes (attempt {retry_count}/{max_retries})...")
-                    time.sleep(300)
+                    logging.info(f"Retrying file {file} in 15 minutes (attempt {retry_count}/{max_retries})...")
+                    time.sleep(900)
             logging.info("")
         if not chunk_tensors:
             logging.info(f"No tokens could be extracted from batch {first_batch_idx+1}. Skipped files: {skipped_files}")
