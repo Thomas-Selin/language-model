@@ -1,77 +1,70 @@
 import logging
-from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
 import os
 from typing import List
-from config import LOG_LEVEL
+from config import LOG_LEVEL, MAX_VOCAB_SIZE
 
-# Configure logging
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='\033[95m[%(levelname)s]\033[0m %(message)s'
-)
+logging.basicConfig(level=LOG_LEVEL, format='\033[95m[%(levelname)s]\033[0m %(message)s')
 
-def create_bpe_tokenizer(text_files, vocab_size=3000):
-    """Create a BPE tokenizer trained on the given text files"""
-    tokenizer = Tokenizer(models.BPE())
-    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-    
+def create_bpe_tokenizer(text_files, vocab_size=MAX_VOCAB_SIZE):
+    """Create a ByteLevel BPE tokenizer trained on the given text files"""
+    tokenizer = Tokenizer(models.BPE(unk_token=SubwordTokenizer.UNK_TOKEN))
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
+    tokenizer.decoder = decoders.ByteLevel()
     trainer = trainers.BpeTrainer(
-        vocab_size=vocab_size, 
-        special_tokens=["<UNK>", "<|endoftext|>"]
+        vocab_size=vocab_size,
+        min_frequency=2,
+        special_tokens=[
+            SubwordTokenizer.UNK_TOKEN,
+            SubwordTokenizer.BOS_TOKEN,
+            SubwordTokenizer.EOS_TOKEN,
+            SubwordTokenizer.PAD_TOKEN,
+        ],
     )
-    
     tokenizer.train(text_files, trainer)
     return tokenizer
 
 class SubwordTokenizer:
-    """
-    Subword-level tokenizer for mapping between text and integer tokens.
-    """
-    UNK_TOKEN = "<UNK>"
+    """Subword-level tokenizer for mapping between text and integer tokens."""
+    UNK_TOKEN = "<|unk|>"
+    BOS_TOKEN = "<|bos|>"
     EOS_TOKEN = "<|endoftext|>"
-    
+    PAD_TOKEN = "<|pad|>"
+
     def __init__(self, vocab_file: str = "vocab.json"):
-        """Initialize from a saved tokenizer file"""
         self.tokenizer = Tokenizer.from_file(vocab_file)
         self._vocab_size = self.tokenizer.get_vocab_size()
-        
-        # Get the vocabulary to find the EOS token ID
         self.vocab = self.tokenizer.get_vocab()
-        # If EOS token exists in vocab, store its ID, otherwise use None
+        self.unk_token_id = self.vocab.get(self.UNK_TOKEN)
+        self.bos_token_id = self.vocab.get(self.BOS_TOKEN)
         self.eos_token_id = self.vocab.get(self.EOS_TOKEN)
-    
+        self.pad_token_id = self.vocab.get(self.PAD_TOKEN)
+
     @staticmethod
-    def build_vocab(text: str, vocab_size: int = 3000, min_frequency: int = 1) -> Tokenizer:
-        """Build a BPE vocabulary from text"""
-        # Save text to temporary file
+    def build_vocab(text: str, vocab_size: int = MAX_VOCAB_SIZE, min_frequency: int = 2) -> Tokenizer:
+        """Build a ByteLevel BPE vocabulary from text"""
         temp_file = "temp_training_file.txt"
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write(text)
-        
-        # Create and train the tokenizer with the EOS token
         tokenizer = create_bpe_tokenizer([temp_file], vocab_size=vocab_size)
-        
-        # Clean up temp file
         if os.path.exists(temp_file):
             os.remove(temp_file)
-            
         return tokenizer
-    
+
     @staticmethod
     def save_vocab(tokenizer, path="data/output/tokenizer.json"):
-        """Save the tokenizer to a file"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tokenizer.save(path)
         logging.info(f"Tokenizer saved to {path}")
 
-    def encode(self, text: str) -> List[int]:
-        """Encode text to token IDs"""
-        return self.tokenizer.encode(text).ids
-    
+    def encode(self, text: str, add_special_tokens: bool = False) -> List[int]:
+        ids = self.tokenizer.encode(text).ids
+        if add_special_tokens and self.bos_token_id is not None and self.eos_token_id is not None:
+            ids = [self.bos_token_id] + ids + [self.eos_token_id]
+        return ids
+
     def decode(self, tokens: List[int]) -> str:
-        """Decode token IDs back to text"""
         return self.tokenizer.decode(tokens)
-    
+
     def get_vocab_size(self) -> int:
-        """Returns the size of the vocabulary"""
         return self._vocab_size

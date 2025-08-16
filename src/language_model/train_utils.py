@@ -246,9 +246,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     train_time = time.time() - train_time
                     scheduler.step()
                     epoch_duration = time.time() - epoch_start_time
-                    logging.debug(f"Writing epoch duration to TensorBoard: {epoch_duration} at step {global_iter}")
                     writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
-                    logging.debug(f"Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
+                    # logging.debug(f"Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
                     writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
                     if iter % eval_interval == 0:
                         logging.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
@@ -306,9 +305,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 
                 # Check for new files manually (non-blocking)
                 current_files = set(f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet'))
-                logging.debug(f"Current .parquet files detected: {current_files}")
                 new_files = current_files - trained_files  # Only files not yet trained
-                logging.debug(f"New files since last training: {new_files}")
 
                 if new_files:
                     ready_file_found = False
@@ -348,11 +345,13 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 
                 # Show periodic status (less frequent to reduce spam)
                 if check_counter % 100 == 0:
+                    logging.debug(f"Current .parquet files detected: {current_files}")
+                    logging.debug(f"New files since last training: {new_files}")
                     logging.debug("Still waiting... (Create 'data/output/STOP_TRAINING' file to stop)")
                 
                 check_counter += 1
-                time.sleep(1)  # Short sleep, check stop file every second
-            
+                time.sleep(10)  # Check stop file every ten seconds
+
             if user_interrupted:
                 break
     except Exception as e:

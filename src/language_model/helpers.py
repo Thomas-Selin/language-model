@@ -27,7 +27,7 @@ def print_memory_usage():
         total_mem = psutil.virtual_memory().total
         used_mem = psutil.virtual_memory().used
         ram_percent = used_mem / total_mem * 100
-        logging.info(f"\nRAM usage: {ram_percent:.2f}% of system memory")
+        logging.info(f"RAM usage: {ram_percent:.2f}% of system memory")
     except ImportError:
         logging.info("Could not import psutil. Install with 'pip install psutil' to monitor memory usage.")
         return

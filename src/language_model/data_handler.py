@@ -109,7 +109,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
             for file in files_for_vocab:
                 file_path = os.path.join(parquet_dir_path, file)
                 try:
-                    df = pd.read_parquet(file_path)
+                    df = pd.read_parquet(file_path, columns=[text_column])
                     if text_column not in df.columns:
                         logging.info(f"Warning: Column '{text_column}' not found in {file}")
                         skipped_files.append(file)
@@ -153,11 +153,11 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         for file_idx, file in enumerate(first_batch):
             file_path = os.path.join(parquet_dir_path, file)
             logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
-            max_retries = 30
+            max_retries = 65
             retry_count = 0
             while retry_count <= max_retries:
                 try:
-                    df = pd.read_parquet(file_path)
+                    df = pd.read_parquet(file_path, columns=[text_column])
                     if text_column not in df.columns:
                         logging.info(f"Warning: Column '{text_column}' not found in {file}, skipping")
                         skipped_files.append(file)
@@ -195,8 +195,8 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         logging.info(f"Max retries reached for file {file}, skipping.")
                         skipped_files.append(file)
                         break
-                    logging.info(f"Retrying file {file} in 15 minutes (attempt {retry_count}/{max_retries})...")
-                    time.sleep(900)
+                    logging.info(f"Retrying file {file} in 10 minutes (attempt {retry_count}/{max_retries}) at {datetime.datetime.now().strftime('%H:%M')}...")
+                    time.sleep(600)
             logging.info("")
         if not chunk_tensors:
             logging.info(f"No tokens could be extracted from batch {first_batch_idx+1}. Skipped files: {skipped_files}")
@@ -234,7 +234,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
         file_path = os.path.join(parquet_dir_path, file)
         logging.info(f"Processing file {file_idx+1}/{len(batch_files)}: {file}")
         try:
-            df = pd.read_parquet(file_path)
+            df = pd.read_parquet(file_path, columns=[text_column])
             if text_column not in df.columns:
                 logging.info(f"Warning: Column '{text_column}' not found in {file}, skipping")
                 continue
