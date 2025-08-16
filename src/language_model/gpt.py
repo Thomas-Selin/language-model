@@ -39,6 +39,20 @@ if __name__ == "__main__":
     # Now process QA dataset for fine-tuning
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
     vocab_size = tokenizer.get_vocab_size()
+
+    # Tokenizer round-trip check
+    test_sentence = "There was a psychedelic rabbit, jumping over 3 fences. He liked cookies! What is the capital of France?"
+    ids = tokenizer.encode(test_sentence)
+    decoded = tokenizer.decode(ids)
+    print("Tokenizer round-trip test:")
+    print("Encoded IDs:", ids)
+    print("Decoded text:", repr(decoded))
+    round_trip_ok = test_sentence == decoded.lstrip(" ")
+    print("Round-trip OK:", round_trip_ok)
+    if not round_trip_ok:
+        print("\033[91mTokenizer round-trip check failed! Aborting training.\033[0m")
+        exit(1)  # or use: import sys; sys.exit(1)
+
     logging.info("\n=== Creating QA dataset for fine-tuning ===")
     from config import BLOCK_SIZE
     block_size = BLOCK_SIZE  # Should match model config
