@@ -1,10 +1,12 @@
 # Record start time with date and time format
-start_time=$(date +%Y-%m-%d_%H-%M)
-logfile="data/output/logs/full_log_$start_time.txt"
+# start_time=$(date +%Y-%m-%d_%H-%M)
+# logfile="data/output/logs/full_log_$start_time.txt"
+logfile="data/output/logs/full_log_2025-08-10_09-52.txt"
+
 runtime_start=$(date +%s)
 
 echo -e "\033[34m- - Running gpt.py - -\033[0m"
-time PYTHONUNBUFFERED=1 PYTHONPATH="$PWD/src/language_model" uv run src/language_model/gpt.py 2>&1 | tee $logfile
+time PYTHONUNBUFFERED=1 PYTHONPATH="$PWD/src/language_model" uv run src/language_model/gpt.py 2>&1 | tee -a $logfile
 
 # echo -e "\033[34m- - Running export.py - -\033[0m"
 # time PYTHONUNBUFFERED=1 PYTHONPATH="$PWD/src/language_model" uv run src/language_model/export.py 2>&1 | tee -a $logfile

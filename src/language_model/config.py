@@ -27,3 +27,4 @@ EARLY_STOPPING_PATIENCE = 40
 MAX_VOCAB_SIZE = 32000
 WARMUP_STEPS = 2000
 LR_DECAY = "cosine"
+TRAINING_START_TIME = "20250810-095241"  # Set to None to use current time, or specify a string like "20251001-120000"

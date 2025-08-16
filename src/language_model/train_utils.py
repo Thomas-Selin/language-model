@@ -65,6 +65,7 @@ def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
 
 def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size_files=1, training_start_time=None, output_dir=None):
     import glob
+def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size_files=1, training_start_time=None, output_dir=None, checkpoint_path=None):
     parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
     if not parquet_files:
         logging.info(f"No parquet files found in {parquet_dir_path}")
@@ -98,6 +99,12 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     - Current time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     """)
     model = GPTLanguageModel(max_vocab_size).to(device)
+    if checkpoint_path is not None and os.path.exists(checkpoint_path):
+        try:
+            model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+            logging.info(f"\033[92mResumed model weights loaded from {checkpoint_path}\033[0m")
+        except Exception as e:
+            logging.warning(f"Failed to load checkpoint from {checkpoint_path}: {e}")
     logging.info(f"{count_parameters(model)/1e6:.2f} M parameters")
     logging.info(f"Model is on device: {next(model.parameters()).device}")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)

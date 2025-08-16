@@ -6,7 +6,7 @@ from helpers import get_device
 from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
 from model import GPTLanguageModel
 from train_utils import base_train_model, train_chat_alignment
-from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL
+from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME
 import logging
 from helpers import configure_colored_logging
 
@@ -14,7 +14,7 @@ from helpers import configure_colored_logging
 configure_colored_logging(LOG_LEVEL)
 
 if __name__ == "__main__":
-    training_start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    training_start_time = TRAINING_START_TIME or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     output_dir = os.path.join('data', 'output', training_start_time)
     # Data paths
     parquet_dir_path = PARQUET_DIR_PATH
@@ -32,7 +32,14 @@ if __name__ == "__main__":
 
     # Base training - now uses train_and_poll for polling and deletion
     logging.info("\n=== Starting base training with polling and auto-deletion ===")
-    base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time, output_dir=output_dir)
+    # Check for existing checkpoint
+    checkpoint_path = os.path.join(output_dir, 'best_model.pt')
+    if os.path.exists(checkpoint_path):
+        logging.info(f"Resuming base training from checkpoint: {checkpoint_path}")
+    else:
+        checkpoint_path = None
+    # Pass checkpoint_path to base_train_model (update base_train_model to accept this argument)
+    base_train_model(parquet_dir_path, text_column, vocab_path, batch_size_files, training_start_time, output_dir=output_dir, checkpoint_path=checkpoint_path)
 
     # Now process QA dataset for fine-tuning
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
