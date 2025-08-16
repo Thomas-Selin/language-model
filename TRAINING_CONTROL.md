@@ -52,5 +52,4 @@ touch data/output/STOP_TRAINING
 ## File locations
 
 - **Stop file**: `data/output/STOP_TRAINING` (created when you want to stop)
-- **Model checkpoint**: `data/output/model_checkpoint.pt` (automatically saved)
 - **Best model**: `data/output/best_model.pt` (saved during training)

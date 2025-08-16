@@ -20,9 +20,7 @@ def export_model_as_safetensors():
 
      # Load the trained model
      model = GPTLanguageModel(vocab_size=vocab_size)
-     # model.load_state_dict(torch.load("data/output/model_checkpoint.pt"))
      model.load_state_dict(torch.load("data/output/chat_aligned_best_model.pt"))
-     # model.load_state_dict(torch.load("data/output/model_interrupted.pt"))
      model.eval()
      
      # Extract model configuration from the model instance

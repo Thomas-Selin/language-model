@@ -359,27 +359,6 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         logging.error(f"An error occurred during training: {e}")
         torch.save(model.state_dict(), os.path.join(output_dir, "model_error.pt"))
         logging.info("Model saved to data/output/model_error.pt due to error")
-    else:
-        # Normal completion
-        torch.save(model.state_dict(), os.path.join(output_dir, "model_checkpoint.pt"))
-        logging.info("Model saved to data/output/model_checkpoint.pt")
-    
-    # Always ensure we have a checkpoint for the next phase
-    if not os.path.exists(os.path.join(output_dir, "model_checkpoint.pt")):
-        if os.path.exists(os.path.join(output_dir, "best_model.pt")):
-            # Copy best model as checkpoint for fine-tuning
-            import shutil
-            shutil.copy(os.path.join(output_dir, "best_model.pt"), os.path.join(output_dir, "model_checkpoint.pt"))
-            logging.info("Copied best model as checkpoint for fine-tuning.")
-        elif os.path.exists(os.path.join(output_dir, "model_error.pt")):
-            # Copy error model as last resort
-            import shutil
-            shutil.copy(os.path.join(output_dir, "model_error.pt"), os.path.join(output_dir, "model_checkpoint.pt"))
-            logging.info("Copied error model as checkpoint for fine-tuning.")
-        else:
-            # Save current state
-            torch.save(model.state_dict(), os.path.join(output_dir, "model_checkpoint.pt"))
-            logging.info("Saved current model state as checkpoint for fine-tuning.")
     
     if writer:
         logging.debug("[DEBUG] Closing TensorBoard writer.")

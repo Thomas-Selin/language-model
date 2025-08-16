@@ -70,7 +70,6 @@ if __name__ == "__main__":
     # Try to load the best available model for fine-tuning
     model_loaded = False
     model_paths_to_try = [
-        os.path.join(output_dir, 'model_checkpoint.pt'),
         os.path.join(output_dir, 'best_model.pt'),
         os.path.join(output_dir, 'model_error.pt')
     ]
