@@ -8,12 +8,10 @@ from model import GPTLanguageModel
 from train_utils import base_train_model, train_chat_alignment
 from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL
 import logging
+from helpers import configure_colored_logging
 
 # Configure logging
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='\033[95m[%(levelname)s]\033[0m %(message)s'
-)
+configure_colored_logging(LOG_LEVEL)
 
 if __name__ == "__main__":
     training_start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")

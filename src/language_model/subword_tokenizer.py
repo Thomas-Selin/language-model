@@ -3,8 +3,10 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
 import os
 from typing import List
 from config import LOG_LEVEL, MAX_VOCAB_SIZE
+from src.language_model.helpers import configure_colored_logging
 
-logging.basicConfig(level=LOG_LEVEL, format='\033[95m[%(levelname)s]\033[0m %(message)s')
+# Configure logging
+configure_colored_logging(LOG_LEVEL)
 
 def create_bpe_tokenizer(text_files, vocab_size=MAX_VOCAB_SIZE):
     """Create a ByteLevel BPE tokenizer trained on the given text files"""

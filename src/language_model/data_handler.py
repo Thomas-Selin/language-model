@@ -1,4 +1,4 @@
-from helpers import print_memory_usage, get_device
+from helpers import print_memory_usage, get_device, configure_colored_logging
 from subword_tokenizer import SubwordTokenizer
 import pandas as pd
 import torch
@@ -10,10 +10,7 @@ import logging
 from config import LOG_LEVEL
 
 # Configure logging
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='\033[95m[%(levelname)s]\033[0m %(message)s'
-)
+configure_colored_logging(LOG_LEVEL)
 
 device = get_device()
 

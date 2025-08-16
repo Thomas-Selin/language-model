@@ -1,12 +1,25 @@
 import torch
 import logging
-from config import LOG_LEVEL
 
-# Configure logging
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='\033[95m[%(levelname)s]\033[0m %(message)s'
-)
+class ColorFormatter(logging.Formatter):
+    COLORS = {
+        'DEBUG': '\033[94m',   # Blue
+        'INFO': '\033[92m',    # Green
+        'WARNING': '\033[91m', # Red
+        'ERROR': '\033[91m',   # Red
+        'CRITICAL': '\033[91m' # Red
+    }
+    RESET = '\033[0m'
+    def format(self, record):
+        color = self.COLORS.get(record.levelname, self.RESET)
+        record.levelname_colored = f"{color}{record.levelname}{self.RESET}"
+        return super().format(record)
+
+def configure_colored_logging(level):
+    formatter = ColorFormatter('[%(levelname_colored)s] %(message)s')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logging.basicConfig(level=level, handlers=[handler])
 
 def get_device():
     if torch.cuda.is_available():

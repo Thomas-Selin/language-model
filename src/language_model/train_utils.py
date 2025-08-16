@@ -8,17 +8,14 @@ from torch.utils.tensorboard import SummaryWriter
 import os
 import time
 import datetime
-from helpers import print_memory_usage, wait_for_keypress, get_device, count_parameters
-from data_handler import get_batch, load_and_process_data, poll_for_new_parquet_file
+from helpers import configure_colored_logging, print_memory_usage, wait_for_keypress, get_device, count_parameters
+from data_handler import get_batch, load_and_process_data
 from model import GPTLanguageModel
 from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY, LOG_LEVEL, FINETUNE_EARLY_STOPPING_PATIENCE
 import logging
 
 # Configure logging
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='\033[95m[%(levelname)s]\033[0m %(message)s'
-)
+configure_colored_logging(LOG_LEVEL)
 
 # Hyperparameters (should be imported or passed in real use)
 batch_size = BATCH_SIZE
