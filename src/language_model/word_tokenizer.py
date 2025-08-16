@@ -9,7 +9,7 @@ class WordTokenizer:
     # Special token for unknown words
     UNK_TOKEN = "<UNK>"
     
-    def __init__(self, vocab_file: str = "vocab.json"):
+    def __init__(self, vocab_file: str = "vocab_subword.json"):
         with open(vocab_file, 'r') as f:
             self.vocab = json.load(f)
             
@@ -35,7 +35,7 @@ class WordTokenizer:
         return [WordTokenizer.UNK_TOKEN] + vocab
 
     @staticmethod
-    def save_vocab(vocab, path="data/output/vocab.json"):
+    def save_vocab(vocab, path="data/output/vocab_subword.json"):
         import os
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:

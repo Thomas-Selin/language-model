@@ -93,11 +93,13 @@ class GPTLanguageModel(nn.Module):
         self.lm_head.weight = self.token_embedding_table.weight
         self.apply(self._init_weights)
         self.use_checkpoint = use_checkpoint
+
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+
     def forward(self, idx, targets=None, return_attention=False):
         B, T = idx.shape
         tok_emb = self.token_embedding_table(idx)
@@ -129,9 +131,19 @@ class GPTLanguageModel(nn.Module):
         if return_attention:
             return logits, loss, attentions
         return logits, loss
-    def generate(self, idx, max_new_tokens, temperature=1.0, return_attention=False, eos_token_id=None):
+    
+    def generate(self, idx, temperature=0.8, top_p=0.9, return_attention=False):
+        """
+        Generate tokens from the model.
+        Args:
+            idx: input tensor of token indices
+            max_new_tokens: number of tokens to generate
+            temperature: sampling temperature
+            top_p: nucleus sampling threshold (float)
+            return_attention: whether to return attention weights
+        """
         all_attentions = [] if return_attention else None
-        for _ in range(max_new_tokens):
+        for _ in range(1024):
             idx_cond = idx[:, -block_size:]
             if return_attention:
                 logits, _, attentions = self(idx_cond, return_attention=True)
@@ -141,10 +153,23 @@ class GPTLanguageModel(nn.Module):
                 logits, _ = self(idx_cond)
             logits = logits[:, -1, :] / temperature
             probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
+            # Nucleus (top-p) sampling
+            sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            # Create mask for tokens to keep
+            sorted_mask = cumulative_probs <= top_p
+            # Always keep at least one token
+            sorted_mask[..., 0] = True
+            # Set probabilities of tokens outside top_p to zero
+            masked_probs = torch.zeros_like(probs)
+            for b in range(probs.size(0)):
+                masked_probs[b, sorted_indices[b][sorted_mask[b]]] = probs[b, sorted_indices[b][sorted_mask[b]]]
+            # Renormalize
+            masked_probs = masked_probs / masked_probs.sum(dim=-1, keepdim=True)
+            idx_next = torch.multinomial(masked_probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
             if return_attention:
                 all_attentions.append([[a.detach().cpu() for a in layer] for layer in attentions])
-            if eos_token_id is not None and (idx_next == eos_token_id).any():
+            if (idx_next == 2).any(): # Check if end of sequence token (id 2) is generated
                 break
         return (idx, all_attentions) if return_attention else idx

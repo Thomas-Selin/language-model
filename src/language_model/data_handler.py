@@ -1,3 +1,4 @@
+import threading
 from helpers import print_memory_usage, get_device, configure_colored_logging
 from subword_tokenizer import SubwordTokenizer
 import pandas as pd
@@ -147,9 +148,12 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         print_memory_usage()
         chunk_tensors = []
         skipped_files = []
+        # Keep track of successfully processed files
+        successfully_processed_files = []
         for file_idx, file in enumerate(first_batch):
             file_path = os.path.join(parquet_dir_path, file)
             logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
+            logging.debug(f"\nChunk size: 100 rows")
             max_retries = 65
             retry_count = 0
             while retry_count <= max_retries:
@@ -160,7 +164,6 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         skipped_files.append(file)
                         break
                     chunk_size_rows = 100
-                    logging.debug(f"Chunk size: {chunk_size_rows} rows")
                     for i in range(0, len(df), chunk_size_rows):
                         end_idx = min(i + chunk_size_rows, len(df))
                         chunk_df = df.iloc[i:end_idx]
@@ -171,19 +174,20 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                             chunk_tensors.append(chunk_tensor)
                         del chunk_text
                         del chunk_df
+                        # Print progress every 100 chunks, with thread name
                         if (i // chunk_size_rows) % 100 == 0:
                             percent_done = end_idx / len(df) * 100
-                            bar_length = 20
-                            filled_length = int(bar_length * end_idx // len(df))
-                            bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                            print(f"\r  Processing {file}: [{bar}] {percent_done:.1f}%", end='', flush=True)
+                            thread_label = threading.current_thread().name
+                            print(f"[{thread_label}] Processing {file}: {percent_done:.1f}% done")
                             if (i // chunk_size_rows) % 50 == 0:
                                 gc.collect()
-                    print("\n")
                     del df
                     gc.collect()
                     if (file_idx + 1) % 3 == 0:
                         print_memory_usage()
+                    # After successfully processing the file (outside the retry loop):
+                    if file not in skipped_files:
+                        successfully_processed_files.append(file)
                     break
                 except Exception as e:
                     retry_count += 1
@@ -192,7 +196,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         logging.info(f"Max retries reached for file {file}, skipping.")
                         skipped_files.append(file)
                         break
-                    logging.info(f"Retrying file {file} in 10 minutes (attempt {retry_count}/{max_retries}) at {datetime.datetime.now().strftime('%H:%M')}...")
+                    logging.info(f"Retrying file {file} in 10 minutes (attempt {retry_count}/{max_retries}) at {datetime.datetime.now().strftime('%H:%M')}")
                     time.sleep(600)
             logging.info("")
         if not chunk_tensors:
@@ -215,8 +219,13 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         del data
         print_memory_usage()
         if single_file is not None:
-            remaining_batches = []
-            logging.debug(f"Remaining batches for single file {single_file}: {remaining_batches}")
+            if single_file in successfully_processed_files:
+                remaining_batches = []
+                logging.info(f"File {single_file} has been successfully processed. No remaining batches.")
+            else:
+                error_msg = f"File {single_file} was found but could not be properly processed."
+                logging.error(error_msg)
+                raise RuntimeError(error_msg)
         else:
             remaining_batches = [all_parquet_files[i:i+batch_size] for i in range((first_batch_idx+1)*batch_size, len(all_parquet_files), batch_size)]
         return train_data, val_data, tokenizer, vocab_size, remaining_batches
@@ -230,6 +239,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
     for file_idx, file in enumerate(batch_files):
         file_path = os.path.join(parquet_dir_path, file)
         logging.info(f"Processing file {file_idx+1}/{len(batch_files)}: {file}")
+        logging.debug(f"\nChunk size: 100 rows")
         try:
             df = pd.read_parquet(file_path, columns=[text_column])
             if text_column not in df.columns:

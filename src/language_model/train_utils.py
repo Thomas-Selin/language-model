@@ -11,28 +11,31 @@ import datetime
 from helpers import configure_colored_logging, print_memory_usage, wait_for_keypress, get_device, count_parameters
 from data_handler import get_batch, load_and_process_data
 from model import GPTLanguageModel
-from config import BATCH_SIZE, BLOCK_SIZE, BASE_TRAINING_MAX_EPOCHS, FINETUNING_MAX_EPOCHS, EVAL_INTERVAL, LEARNING_RATE, EVAL_ITERS, N_EMBD, N_HEAD, N_LAYER, DROPOUT, EARLY_STOPPING_PATIENCE, MAX_VOCAB_SIZE, WARMUP_STEPS, LR_DECAY, LOG_LEVEL, FINETUNE_EARLY_STOPPING_PATIENCE
+import config
 import logging
+import glob
+import threading
+from subword_tokenizer import SubwordTokenizer
 
 # Configure logging
-configure_colored_logging(LOG_LEVEL)
+configure_colored_logging(config.LOG_LEVEL)
 
 # Hyperparameters (should be imported or passed in real use)
-batch_size = BATCH_SIZE
-block_size = BLOCK_SIZE
-base_training_max_epochs = BASE_TRAINING_MAX_EPOCHS
-finetuning_max_epochs = FINETUNING_MAX_EPOCHS
-eval_interval = EVAL_INTERVAL
-learning_rate = LEARNING_RATE
-eval_iters = EVAL_ITERS
-n_embd = N_EMBD
-n_head = N_HEAD
-n_layer = N_LAYER
-dropout = DROPOUT
-early_stopping_patience = EARLY_STOPPING_PATIENCE
-max_vocab_size = MAX_VOCAB_SIZE
-warmup_steps = WARMUP_STEPS
-lr_decay = LR_DECAY
+batch_size = config.BATCH_SIZE
+block_size = config.BLOCK_SIZE
+base_training_max_epochs = config.BASE_TRAINING_MAX_EPOCHS
+finetuning_max_epochs = config.FINETUNING_MAX_EPOCHS
+eval_interval = config.EVAL_INTERVAL
+learning_rate = config.LEARNING_RATE
+eval_iters = config.EVAL_ITERS
+n_embd = config.N_EMBD
+n_head = config.N_HEAD
+n_layer = config.N_LAYER
+dropout = config.DROPOUT
+early_stopping_patience = config.EARLY_STOPPING_PATIENCE
+max_vocab_size = config.MAX_VOCAB_SIZE
+warmup_steps = config.WARMUP_STEPS
+lr_decay = config.LR_DECAY
 device = get_device()
 
 @torch.no_grad()
@@ -63,10 +66,27 @@ def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
             return 1.0
     return LambdaLR(optimizer, lr_lambda)
 
-def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size_files=1, training_start_time=None, output_dir=None):
-    import glob
-def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab.json', batch_size_files=1, training_start_time=None, output_dir=None, checkpoint_path=None):
-    parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+def preload_parquet(parquet_file, vocab_size, parquet_dir_path, text_column, vocab_path, batch_size):
+    # This function will run in a background thread
+    result = {}
+    def loader():
+        result['data'] = load_and_process_data(
+            vocab_size=vocab_size,
+            parquet_dir_path=parquet_dir_path,
+            text_column=text_column,
+            vocab_path=vocab_path,
+            batch_size=batch_size,
+            single_file=parquet_file
+        )
+    thread = threading.Thread(target=loader)
+    thread.start()
+    return thread, result
+
+def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', training_start_time=None, output_dir=None, checkpoint_path=None):
+    parquet_files = sorted(
+        glob.glob(os.path.join(parquet_dir_path, '*.parquet')),
+        key=lambda x: os.path.basename(x)
+    )
     if not parquet_files:
         logging.info(f"No parquet files found in {parquet_dir_path}")
         return
@@ -131,13 +151,19 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     global_max_epochs = base_training_max_epochs
     try:
         while True:
-            parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+            parquet_files = sorted(
+                glob.glob(os.path.join(parquet_dir_path, '*.parquet')),
+                key=lambda x: os.path.basename(x)
+            )
             # Remove the first file if present (avoid double processing)
             # parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
             if not parquet_files:
                 logging.info(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
                 wait_for_keypress()
-                parquet_files = sorted(glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
+                parquet_files = sorted(
+                    glob.glob(os.path.join(parquet_dir_path, '*.parquet')),
+                    key=lambda x: os.path.basename(x)
+                )
                 # parquet_files = [f for f in parquet_files if os.path.basename(f) != file_name_single]
                 if not parquet_files:
                     logging.info("No files present after keypress. Base training finished.")
@@ -162,9 +188,22 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 logging.debug("Memory usage after cleanup:")
                 print_memory_usage()
                 logging.info(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
+                logging.debug(f"\nChunk size: 100 rows")
                 best_val_loss = float('inf')
                 file_dir = os.path.dirname(parquet_file)
                 file_name = os.path.basename(parquet_file)
+
+                # Start preloading the next file (if any)
+                next_file = parquet_files[file_idx + 1] if file_idx + 1 < len(parquet_files) else None
+                preload_thread, preload_result = None, None
+                if next_file:
+                    next_file_dir = os.path.dirname(next_file)
+                    next_file_name = os.path.basename(next_file)
+                    preload_thread, preload_result = preload_parquet(
+                        next_file_name, max_vocab_size, next_file_dir, text_column, vocab_path, batch_size
+                    )
+
+                # Load current file (blocking)
                 train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
                     vocab_size=max_vocab_size,
                     parquet_dir_path=file_dir,
@@ -173,6 +212,12 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     batch_size=batch_size,
                     single_file=file_name
                 )
+
+                # If preloading was started, wait for it to finish and use the result for the next iteration
+                if preload_thread:
+                    preload_thread.join()
+                    train_data, val_data, tokenizer, vocab_size, _ = preload_result['data']
+
                 # Set up LR scheduler for each file.
                 # One optimizer step per loop iteration, so steps_per_file == base_training_max_epochs.
                 steps_per_file = base_training_max_epochs
@@ -223,14 +268,21 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                                         writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
                             # Log generated text samples
                             context = torch.zeros((1, 1), dtype=torch.long, device=device)
-                            sample_text_1 = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=1.0)[0].tolist())
-                            sample_text_05 = tokenizer.decode(model.generate(context, max_new_tokens=100, temperature=0.5)[0].tolist())
-                            writer.add_text('Generated Text 1.0 temp', sample_text_1, global_iter)
-                            writer.add_text('Generated Text 0.5 temp', sample_text_05, global_iter)
-                            for prompt, temp in [("What color is the ball?", 0.5), ("What color is the ball?", 1.0), ("There was a", 0.5)]:
+                            for temp in [0.5, 0.8, 1.0]:
+                                # Unconditional generation (no prompt)
+                                context = torch.zeros((1, 1), dtype=torch.long, device=device)
+                                sample_text = tokenizer.decode(model.generate(context, temperature=temp)[0].tolist())
+                                writer.add_text(f'Generated Text (no prompt) {temp} temp', sample_text, global_iter)
+                                # Prompted generation 1
+                                prompt = "Which Emmy award was American Idol nominated for nine times?"
                                 input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-                                sample_text = tokenizer.decode(model.generate(input_ids, max_new_tokens=100, temperature=temp)[0].tolist())
-                                writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text, global_iter)
+                                sample_text_prompt = tokenizer.decode(model.generate(input_ids, temperature=temp)[0].tolist())
+                                writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text_prompt, global_iter)
+                                # Prompted generation 2
+                                prompt = "Where is Paris?"
+                                input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
+                                sample_text_prompt = tokenizer.decode(model.generate(input_ids, temperature=temp)[0].tolist())
+                                writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text_prompt, global_iter)
                     epoch_start_time = time.time()
                     data_time = time.time()
                     xb, yb = get_batch(block_size, batch_size, 'train', train_data, val_data)
@@ -290,7 +342,6 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             check_counter = 0
             
             # Keep track of files we've already seen to detect new ones
-            import glob
             seen_files = set(os.path.basename(f) for f in glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
             # Require at least 200 Kb and stable size across consecutive checks
             MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
@@ -368,9 +419,22 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         logging.debug("[DEBUG] Closing TensorBoard writer.")
         writer.close()
 
-def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_split=0.1, tensorboard_logdir=None, output_dir=None):
-    if output_dir is None:
-        output_dir = 'data/output'
+def log_generated_samples(model, tokenizer, writer, global_step, device):
+    """
+    Log unconditional and prompted generations to TensorBoard.
+    """
+    for temp in [0.5, 0.8, 1.0]:
+        # Unconditional generation (no prompt)
+        context = torch.zeros((1, 1), dtype=torch.long, device=device)
+        sample_text = tokenizer.decode(model.generate(context, temperature=temp)[0].tolist())
+        writer.add_text(f'Generated Text (no prompt) {temp} temp', sample_text, global_step)
+        # Prompted generation
+        prompt = "Which Emmy award was American Idol nominated for nine times?"
+        input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
+        sample_text_prompt = tokenizer.decode(model.generate(input_ids, temperature=temp)[0].tolist())
+        writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text_prompt, global_step)
+
+def train_chat_alignment(model, qa_tensor, tensorboard_logdir, output_dir, lr=1e-4, batch_size=batch_size, val_split=0.1):
     os.makedirs(output_dir, exist_ok=True)
     epochs = finetuning_max_epochs
     model.train()
@@ -380,23 +444,23 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
     train_tensor = qa_tensor[:split_idx]
     val_tensor = qa_tensor[split_idx:]
 
-    # Steps = optimizer updates (batches) over the whole run
     total_steps = epochs * ((train_tensor.size(0) + batch_size - 1) // batch_size)
     warmup_steps = max(10, min(200, int(0.02 * total_steps)))  # ~2% with floor=10, cap=200
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     scheduler = get_lr_scheduler(optimizer, warmup_steps=warmup_steps, lr_decay="cosine", total_steps=total_steps)
-    patience = FINETUNE_EARLY_STOPPING_PATIENCE
+    patience = config.FINETUNE_EARLY_STOPPING_PATIENCE
     logging.info(f"Chat alignment: total_steps={total_steps}, warmup_steps={warmup_steps}, patience={patience}")
     scaler = GradScaler(enabled=torch.cuda.is_available())
     global_step = 0
     best_val_loss = float('inf')
     epochs_without_improvement = 0
     logging.info(f"Total samples: {num_samples}, Train: {train_tensor.size(0)}, Val: {val_tensor.size(0)}")
-    writer = None
-    if tensorboard_logdir is not None:
-        writer = SummaryWriter(tensorboard_logdir)
-        logging.info(f"TensorBoard logging started. View logs with: tensorboard --logdir={tensorboard_logdir}")
+    tokenizer = SubwordTokenizer(vocab_file=config.VOCAB_PATH)
+
+    writer = SummaryWriter(tensorboard_logdir)
+    logging.info(f"TensorBoard logging started. View logs with: tensorboard --logdir={tensorboard_logdir}")
+
     for epoch in range(epochs):
         logging.info(f"\nEpoch {epoch+1}/{epochs} START")
         model.train()
@@ -409,7 +473,6 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
             with autocast(device_type=device.type):
                 logits, loss = model(inputs, targets)
             scaler.scale(loss).backward()
-            # safe gradient clipping for SFT
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
@@ -417,9 +480,9 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * inputs.size(0)
-            # Only log train loss every 100 steps and at the last batch
-            if writer and (global_step % 100 == 0 or batch_idx == num_train_batches - 1):
+            if global_step % 100 == 0 or batch_idx == num_train_batches - 1:
                 writer.add_scalar('Loss/train', loss.item(), global_step)
+                log_generated_samples(model, tokenizer, writer, global_step, device)
             global_step += 1
             if batch_idx % 1000 == 0:
                 logging.info(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
@@ -438,9 +501,9 @@ def train_chat_alignment(model, qa_tensor, lr=1e-4, batch_size=batch_size, val_s
                 with autocast(device_type=device.type):
                     logits, loss = model(inputs, targets)
                 val_loss += loss.item() * inputs.size(0)
-                # Only log val loss every 100 steps and at the last batch
-                if writer and (global_step % 100 == 0 or batch_idx == num_val_batches - 1):
+                if global_step % 100 == 0 or batch_idx == num_val_batches - 1:
                     writer.add_scalar('Loss/val', loss.item(), global_step)
+                    log_generated_samples(model, tokenizer, writer, global_step, device)
                 global_step += 1
                 if batch_idx % 250 == 0:
                     logging.info(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")

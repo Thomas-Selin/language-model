@@ -3,7 +3,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
 import os
 from typing import List
 from config import LOG_LEVEL, MAX_VOCAB_SIZE
-from src.language_model.helpers import configure_colored_logging
+from helpers import configure_colored_logging
 
 # Configure logging
 configure_colored_logging(LOG_LEVEL)
@@ -33,7 +33,7 @@ class SubwordTokenizer:
     EOS_TOKEN = "<|endoftext|>"
     PAD_TOKEN = "<|pad|>"
 
-    def __init__(self, vocab_file: str = "vocab.json"):
+    def __init__(self, vocab_file: str = "vocab_subword.json"):
         self.tokenizer = Tokenizer.from_file(vocab_file)
         self._vocab_size = self.tokenizer.get_vocab_size()
         self.vocab = self.tokenizer.get_vocab()
