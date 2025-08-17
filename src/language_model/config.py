@@ -6,7 +6,6 @@ LOG_LEVEL = "DEBUG"  # Set to "INFO" or "DEBUG" as needed
 # Data paths
 PARQUET_DIR_PATH = 'data/input/parquet_files'
 TEXT_COLUMN = 'text'
-VOCAB_PATH = 'data/output/vocab_subword.json'
 QA_PARQUET_PATH = 'data/input/chat-align/train-00000-of-00001.parquet'
 CONTEXT_PARQUET_PATH = 'data/input/context_data.parquet'
 
@@ -16,7 +15,7 @@ BLOCK_SIZE = 512
 BASE_TRAINING_MAX_EPOCHS = 100
 FINETUNING_MAX_EPOCHS = 3
 FINETUNE_EARLY_STOPPING_PATIENCE = 2
-EVAL_INTERVAL = 3
+EVAL_INTERVAL = 5
 LEARNING_RATE = 3e-4
 EVAL_ITERS = 100
 N_EMBD = 768
@@ -28,3 +27,9 @@ MAX_VOCAB_SIZE = 32000
 WARMUP_STEPS = 2000
 LR_DECAY = "cosine"
 TRAINING_START_TIME = "20250810-095241"  # Set to None to use current time, or specify a string like "20251001-120000"
+
+import datetime
+def get_vocab_path():
+	folder = TRAINING_START_TIME if TRAINING_START_TIME else datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+	return f"data/output/{folder}/vocab_subword.json"
+VOCAB_PATH = get_vocab_path()

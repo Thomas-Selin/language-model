@@ -24,6 +24,20 @@ def create_bpe_tokenizer(text_files, vocab_size=MAX_VOCAB_SIZE):
         ],
     )
     tokenizer.train(text_files, trainer)
+
+    # Tokenizer round-trip check
+    test_sentence = "There was a psychedelic rabbit, jumping over 3 fences. He liked cookies! What is the capital of France?"
+    ids = tokenizer.encode(test_sentence)
+    decoded = tokenizer.decode(ids)
+    print("Tokenizer round-trip test:")
+    print("Encoded IDs:", ids)
+    print("Decoded text:", repr(decoded))
+    round_trip_ok = test_sentence == decoded.lstrip(" ")
+    print("Round-trip OK:", round_trip_ok)
+    if not round_trip_ok:
+        print("\033[91mTokenizer round-trip check failed! Aborting training.\033[0m")
+        exit(1)  # or use: import sys; sys.exit(1)
+
     return tokenizer
 
 class SubwordTokenizer:

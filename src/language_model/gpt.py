@@ -5,7 +5,7 @@ from subword_tokenizer import SubwordTokenizer
 from helpers import get_device
 from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
 from model import GPTLanguageModel
-from train_utils import base_train_model, train_chat_alignment
+from train_utils import base_train_model, max_vocab_size, train_chat_alignment
 from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME
 import logging
 from helpers import configure_colored_logging
@@ -45,19 +45,6 @@ if __name__ == "__main__":
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
     vocab_size = tokenizer.get_vocab_size()
 
-    # Tokenizer round-trip check
-    test_sentence = "There was a psychedelic rabbit, jumping over 3 fences. He liked cookies! What is the capital of France?"
-    ids = tokenizer.encode(test_sentence)
-    decoded = tokenizer.decode(ids)
-    print("Tokenizer round-trip test:")
-    print("Encoded IDs:", ids)
-    print("Decoded text:", repr(decoded))
-    round_trip_ok = test_sentence == decoded.lstrip(" ")
-    print("Round-trip OK:", round_trip_ok)
-    if not round_trip_ok:
-        print("\033[91mTokenizer round-trip check failed! Aborting training.\033[0m")
-        exit(1)  # or use: import sys; sys.exit(1)
-
     logging.info("\n=== Creating QA dataset for fine-tuning ===")
     from config import BLOCK_SIZE
     block_size = BLOCK_SIZE  # Should match model config
@@ -70,7 +57,7 @@ if __name__ == "__main__":
     
     # Load pre-trained model
     device = get_device()
-    model = GPTLanguageModel(vocab_size).to(device)
+    model = GPTLanguageModel(max_vocab_size).to(device) #TODO: should be vocab_size
     
     # Try to load the best available model for fine-tuning
     model_loaded = False
