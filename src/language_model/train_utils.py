@@ -18,6 +18,10 @@ import threading
 from subword_tokenizer import SubwordTokenizer
 import json
 
+# Magic numbers as constants
+MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
+STABLE_COUNT_THRESHOLD = 30
+
 # Configure logging
 configure_colored_logging(config.LOG_LEVEL)
 
@@ -42,7 +46,7 @@ device = get_device()
 # Runtime override config file
 RUNTIME_OVERRIDES_FILE = "data/output/RUNTIME_OVERRIDES.json"
 
-def apply_runtime_overrides(optimizer, scheduler, params):
+def apply_runtime_overrides(optimizer: torch.optim.Optimizer, scheduler, params: dict) -> tuple[dict, dict]:
     # Optionally return global_iter and total_epochs_run if present
     extra = {}
     """
@@ -125,7 +129,16 @@ def apply_runtime_overrides(optimizer, scheduler, params):
     return params, extra
 
 @torch.no_grad()
-def estimate_loss(model, train_data, val_data):
+def estimate_loss(model: nn.Module, train_data, val_data) -> dict:
+    """
+    Estimate average train and validation loss over eval_iters batches.
+    Args:
+        model: The language model.
+        train_data: Training data.
+        val_data: Validation data.
+    Returns:
+        Dictionary with mean losses for 'train' and 'val'.
+    """
     out = {}
     model.eval()
     for split in ['train', 'val']:
@@ -139,7 +152,7 @@ def estimate_loss(model, train_data, val_data):
     model.train()
     return out
 
-def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
+def get_lr_scheduler(optimizer: torch.optim.Optimizer, warmup_steps: int, lr_decay: str, total_steps: int) -> LambdaLR:
     def lr_lambda(current_step):
         if current_step < warmup_steps:
             return float(current_step) / float(max(1, warmup_steps))
@@ -152,7 +165,7 @@ def get_lr_scheduler(optimizer, warmup_steps, lr_decay, total_steps):
             return 1.0
     return LambdaLR(optimizer, lr_lambda)
 
-def preload_parquet(parquet_file, vocab_size, parquet_dir_path, text_column, vocab_path, batch_size):
+def preload_parquet(parquet_file: str, vocab_size: int, parquet_dir_path: str, text_column: str, vocab_path: str, batch_size: int):
     # This function will run in a background thread
     result = {}
     def loader():
@@ -168,7 +181,24 @@ def preload_parquet(parquet_file, vocab_size, parquet_dir_path, text_column, voc
     thread.start()
     return thread, result
 
-def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', training_start_time=None, output_dir=None, checkpoint_path=None):
+def base_train_model(
+    parquet_dir_path: str,
+    text_column: str = 'text',
+    vocab_path: str = 'data/output/vocab_subword.json',
+    training_start_time: str = None,
+    output_dir: str = None,
+    checkpoint_path: str = None
+) -> None:
+    """
+    Main training loop for base model. Handles file watching, training, evaluation, early stopping, and TensorBoard logging.
+    Args:
+        parquet_dir_path: Directory containing .parquet files.
+        text_column: Name of text column in parquet files.
+        vocab_path: Path to vocabulary file.
+        training_start_time: Timestamp string for output dir naming.
+        output_dir: Output directory for logs and models.
+        checkpoint_path: Optional path to resume model weights.
+    """
     parquet_files = sorted(
         glob.glob(os.path.join(parquet_dir_path, '*.parquet')),
         key=lambda x: os.path.basename(x)
@@ -189,7 +219,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         try:
             model.load_state_dict(torch.load(checkpoint_path, map_location=device))
             logging.info(f"\033[92mResumed model weights loaded from {checkpoint_path}\033[0m")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logging.warning(f"Failed to load checkpoint from {checkpoint_path}: {e}")
     logging.info(f"{count_parameters(model)/1e6:.2f} M parameters")
     logging.info(f"Model is on device: {next(model.parameters()).device}")
@@ -213,10 +243,10 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
     writer.add_graph(vis_model, sample_input)
     best_val_loss = float('inf')
     epochs_without_improvement = 0
-    global_iter = 0
-    batch_counter = 0
+    global_iter = None  # Will be set by config or runtime overrides
     total_epochs_run = 0
     global_max_epochs = base_training_max_epochs
+    tensorboard_logged = False  # Initialize flag
     # Initialize runtime_params before the main training loop
     runtime_params = {
         'eval_interval': config.EVAL_INTERVAL,
@@ -337,6 +367,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 # Optionally update global_iter/total_epochs_run between files
                 if 'global_iter' in extra_counters:
                     global_iter = extra_counters['global_iter']
+                elif global_iter is None and hasattr(config, 'GLOBAL_ITER'):
+                    global_iter = getattr(config, 'GLOBAL_ITER')
                 if 'total_epochs_run' in extra_counters:
                     total_epochs_run = extra_counters['total_epochs_run']
                 # Set up LR scheduler for each file.
@@ -354,7 +386,6 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         logging.debug("Memory usage before evaluation:")
                         print_memory_usage()
                         logging.info(f"File {file_idx+1}, Step {iter} of max {base_training_max_epochs}: train loss {losses['train']:.4f}, 📏 val loss {losses['val']:.4f}")
-                        
                         # Save best model if val loss improves
                         if losses['val'] < best_val_loss:
                             logging.info(f"Validation loss improved ({losses['val']:.4f} < {best_val_loss:.4f}). Saving best model.")
@@ -364,14 +395,13 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         else:
                             epochs_without_improvement += 1
                             logging.info(f"Epochs without improvement: {epochs_without_improvement}")
-                        
                         if epochs_without_improvement >= early_stopping_patience:
                             logging.info(f"Early stopping triggered at epoch {iter}. Best val loss: {best_val_loss:.4f}")
                             logging.info("Restoring best model weights...")
                             model.load_state_dict(torch.load(os.path.join(output_dir, "best_model.pt")))
                             break
                         # Only log to TensorBoard every eval_interval * 5 steps or at the last step
-                        if global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1):
+                        if global_iter is not None and (global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1)):
                             logging.debug(f"Writing metrics and generated text to TensorBoard at step {global_iter}")
                             writer.add_scalar('Loss/train', losses['train'], global_iter)
                             writer.add_scalar('Loss/val', losses['val'], global_iter)
@@ -388,22 +418,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                                     if param.grad is not None:
                                         writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
                             # Log generated text samples
-                            context = torch.zeros((1, 1), dtype=torch.long, device=device)
-                            for temp in [0.5, 0.8, 1.0]:
-                                # Unconditional generation (no prompt)
-                                context = torch.zeros((1, 1), dtype=torch.long, device=device)
-                                sample_text = tokenizer.decode(model.generate(context, temperature=temp)[0].tolist())
-                                writer.add_text(f'Generated Text (no prompt) {temp} temp', sample_text, global_iter)
-                                # Prompted generation 1
-                                prompt = "Which Emmy award was American Idol nominated for nine times?"
-                                input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-                                sample_text_prompt = tokenizer.decode(model.generate(input_ids, temperature=temp)[0].tolist())
-                                writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text_prompt, global_iter)
-                                # Prompted generation 2
-                                prompt = "Where is Paris?"
-                                input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-                                sample_text_prompt = tokenizer.decode(model.generate(input_ids, temperature=temp)[0].tolist())
-                                writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text_prompt, global_iter)
+                            log_generated_samples(model, tokenizer, writer, global_iter, device)
                     epoch_start_time = time.time()
                     data_time = time.time()
                     xb, yb = get_batch(block_size, batch_size, 'train', train_data, val_data)
@@ -428,7 +443,8 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                     writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
                     if iter % eval_interval == 0:
                         logging.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
-                    global_iter += 1
+                    if global_iter is not None:
+                        global_iter += 1
                     if epochs_without_improvement >= early_stopping_patience:
                         logging.info("Early stopping triggered. Moving to next file if available.")
                         break
@@ -437,6 +453,10 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                 try:
                     os.remove(parquet_file)
                     logging.info(f"Deleted file after training: {parquet_file}")
+                except FileNotFoundError as e:
+                    logging.info(f"File not found when deleting {parquet_file}: {e}")
+                except PermissionError as e:
+                    logging.info(f"Permission error when deleting {parquet_file}: {e}")
                 except Exception as e:
                     logging.info(f"Error deleting file {parquet_file}: {e}")
             logging.info("\nAll files in folder processed. Waiting for new files...\n")
@@ -465,7 +485,6 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
             # Keep track of files we've already seen to detect new ones
             seen_files = set(os.path.basename(f) for f in glob.glob(os.path.join(parquet_dir_path, '*.parquet')))
             # Require at least 200 Kb and stable size across consecutive checks
-            MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
             size_state = {}  # file -> (last_size, stable_count)
             trained_files = set()  # Files that have been used for training
 
@@ -496,7 +515,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
 
                         if curr_size >= MIN_FILE_SIZE_BYTES and prev_size is not None and curr_size == prev_size:
                             stable_count += 1  # one more stable check
-                            logging.debug(f"File '{file}' size is stable and >=200 KB ({curr_size/1024/1024:.2f} MB). Stable count: {stable_count}/30")
+                            logging.debug(f"File '{file}' size is stable and >=200 KB ({curr_size/1024/1024:.2f} MB). Stable count: {stable_count}/{STABLE_COUNT_THRESHOLD}")
                         else:
                             if curr_size < MIN_FILE_SIZE_BYTES:
                                 logging.debug(f"File '{file}' is too small ({curr_size/1024/1024:.2f} MB). Waiting for upload to finish.")
@@ -509,7 +528,7 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
                         size_state[file] = (curr_size, stable_count)
 
                         # Require N consecutive stable checks (e.g., 30 loops ≈ 30 seconds)
-                        if stable_count >= 30:
+                        if stable_count >= STABLE_COUNT_THRESHOLD:
                             logging.info(f"New file detected and size stabilized (>=200 KB): {file} ({curr_size/1024/1024:.1f} MB)")
                             logging.info(f"File '{file}' appears to have finished uploading. Resuming training with new file...")
                             trained_files.add(file)  # Mark as trained AFTER processing
@@ -540,22 +559,58 @@ def base_train_model(parquet_dir_path, text_column='text', vocab_path='data/outp
         logging.debug("[DEBUG] Closing TensorBoard writer.")
         writer.close()
 
-def log_generated_samples(model, tokenizer, writer, global_step, device):
+def log_generated_samples(
+    model: nn.Module,
+    tokenizer: SubwordTokenizer,
+    writer: SummaryWriter,
+    global_step: int,
+    device: torch.device
+) -> None:
     """
     Log unconditional and prompted generations to TensorBoard.
+    Args:
+        model: The language model.
+        tokenizer: Tokenizer for decoding outputs.
+        writer: TensorBoard SummaryWriter.
+        global_step: Current global step for logging.
+        device: Device to run generation on.
     """
     for temp in [0.5, 0.8, 1.0]:
         # Unconditional generation (no prompt)
         context = torch.zeros((1, 1), dtype=torch.long, device=device)
         sample_text = tokenizer.decode(model.generate(context, temperature=temp)[0].tolist())
         writer.add_text(f'Generated Text (no prompt) {temp} temp', sample_text, global_step)
-        # Prompted generation
-        prompt = "Which Emmy award was American Idol nominated for nine times?"
-        input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-        sample_text_prompt = tokenizer.decode(model.generate(input_ids, temperature=temp)[0].tolist())
-        writer.add_text(f'Generated Text: "{prompt}" {temp} temp', sample_text_prompt, global_step)
+        # Prompted generation 1
+        prompt1 = "Which Emmy award was American Idol nominated for nine times?"
+        input_ids1 = torch.tensor([tokenizer.encode(prompt1)], dtype=torch.long, device=device)
+        sample_text_prompt1 = tokenizer.decode(model.generate(input_ids1, temperature=temp)[0].tolist())
+        writer.add_text(f'Generated Text: "{prompt1}" {temp} temp', sample_text_prompt1, global_step)
+        # Prompted generation 2
+        prompt2 = "Where is Paris?"
+        input_ids2 = torch.tensor([tokenizer.encode(prompt2)], dtype=torch.long, device=device)
+        sample_text_prompt2 = tokenizer.decode(model.generate(input_ids2, temperature=temp)[0].tolist())
+        writer.add_text(f'Generated Text: "{prompt2}" {temp} temp', sample_text_prompt2, global_step)
 
-def train_chat_alignment(model, qa_tensor, tensorboard_logdir, output_dir, lr=1e-4, batch_size=batch_size, val_split=0.1):
+def train_chat_alignment(
+    model: nn.Module,
+    qa_tensor: torch.Tensor,
+    tensorboard_logdir: str,
+    output_dir: str,
+    lr: float = 1e-4,
+    batch_size: int = batch_size,
+    val_split: float = 0.1
+) -> None:
+    """
+    Finetune model for chat alignment using QA tensor data. Logs metrics and samples to TensorBoard.
+    Args:
+        model: The language model.
+        qa_tensor: Tensor of QA data.
+        tensorboard_logdir: Directory for TensorBoard logs.
+        output_dir: Directory to save model.
+        lr: Learning rate.
+        batch_size: Batch size.
+        val_split: Fraction of data for validation.
+    """
     os.makedirs(output_dir, exist_ok=True)
     epochs = finetuning_max_epochs
     model.train()
