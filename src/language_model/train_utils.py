@@ -279,7 +279,14 @@ def base_train_model(
                     logging.info("No files present after keypress. Base training finished.")
                     break
                 continue
+            # Track processed files to avoid double processing
+            processed_files = set()
             for file_idx, parquet_file in enumerate(parquet_files):
+                file_name = os.path.basename(parquet_file)
+                if file_name in processed_files:
+                    logging.debug(f"Skipping already processed file: {file_name}")
+                    continue
+                processed_files.add(file_name)
                 logging.debug("Performing memory cleanup before loading new file...")
                 try:
                     del train_data
@@ -298,10 +305,9 @@ def base_train_model(
                 logging.debug("Memory usage after cleanup:")
                 print_memory_usage()
                 logging.info(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}. Setting best_val_loss to infinity.")
-                logging.debug(f"\nChunk size: 100 rows")
+                logging.debug(f"Chunk size: 100 rows")
                 best_val_loss = float('inf')
                 file_dir = os.path.dirname(parquet_file)
-                file_name = os.path.basename(parquet_file)
 
                 # Start preloading the next file (if any)
                 next_file = parquet_files[file_idx + 1] if file_idx + 1 < len(parquet_files) else None
@@ -364,6 +370,7 @@ def base_train_model(
                     - Current time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     """)
                     tensorboard_logged = True
+                logging.info(f"Global iteration: {global_iter}, Total epochs run: {total_epochs_run}")
                 # Optionally update global_iter/total_epochs_run between files
                 if 'global_iter' in extra_counters:
                     global_iter = extra_counters['global_iter']
@@ -400,25 +407,27 @@ def base_train_model(
                             logging.info("Restoring best model weights...")
                             model.load_state_dict(torch.load(os.path.join(output_dir, "best_model.pt")))
                             break
+                        logging.info(f"Current global_iter: {global_iter}")
                         # Only log to TensorBoard every eval_interval * 5 steps or at the last step
-                        if global_iter is not None and (global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1)):
-                            logging.debug(f"Writing metrics and generated text to TensorBoard at step {global_iter}")
-                            writer.add_scalar('Loss/train', losses['train'], global_iter)
-                            writer.add_scalar('Loss/val', losses['val'], global_iter)
-                            writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'])), global_iter)
-                            writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'])), global_iter)
-                            if torch.cuda.is_available():
-                                writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
-                                writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
-                                writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
-                            # Log parameter and gradient histograms less frequently
-                            if global_iter % (eval_interval * 10) == 0:
-                                for name, param in model.named_parameters():
-                                    writer.add_histogram(f'Parameters/{name}', param, global_iter)
-                                    if param.grad is not None:
-                                        writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
-                            # Log generated text samples
-                            log_generated_samples(model, tokenizer, writer, global_iter, device)
+                        if global_iter is not None:
+                            if (global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1)):
+                                logging.debug(f"Writing metrics and generated text to TensorBoard at step {global_iter}")
+                                writer.add_scalar('Loss/train', losses['train'], global_iter)
+                                writer.add_scalar('Loss/val', losses['val'], global_iter)
+                                writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'])), global_iter)
+                                writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'])), global_iter)
+                                if torch.cuda.is_available():
+                                    writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
+                                    writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
+                                    writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
+                                # Log parameter and gradient histograms less frequently
+                                if global_iter % (eval_interval * 10) == 0:
+                                    for name, param in model.named_parameters():
+                                        writer.add_histogram(f'Parameters/{name}', param, global_iter)
+                                        if param.grad is not None:
+                                            writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
+                                # Log generated text samples
+                                log_generated_samples(model, tokenizer, writer, global_iter, device)
                     epoch_start_time = time.time()
                     data_time = time.time()
                     xb, yb = get_batch(block_size, batch_size, 'train', train_data, val_data)
@@ -433,14 +442,15 @@ def base_train_model(
                         optimizer.zero_grad(set_to_none=True)
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    if global_iter % 3 == 0:
+                    if global_iter is not None and global_iter % 5 == 0:
                         gc.collect()
                     train_time = time.time() - train_time
                     scheduler.step()
                     epoch_duration = time.time() - epoch_start_time
-                    writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
-                    # logging.debug(f"Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
-                    writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
+                    if global_iter is not None:
+                        writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
+                        # logging.debug(f"Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
+                        writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
                     if iter % eval_interval == 0:
                         logging.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
                     if global_iter is not None:

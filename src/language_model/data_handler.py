@@ -153,7 +153,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         for file_idx, file in enumerate(first_batch):
             file_path = os.path.join(parquet_dir_path, file)
             logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
-            logging.debug(f"\nChunk size: 100 rows")
+            logging.debug(f"Chunk size: 100 rows")
             max_retries = 65
             retry_count = 0
             while retry_count <= max_retries:
@@ -239,7 +239,7 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
     for file_idx, file in enumerate(batch_files):
         file_path = os.path.join(parquet_dir_path, file)
         logging.info(f"Processing file {file_idx+1}/{len(batch_files)}: {file}")
-        logging.debug(f"\nChunk size: 100 rows")
+        logging.debug(f"Chunk size: 100 rows")
         try:
             df = pd.read_parquet(file_path, columns=[text_column])
             if text_column not in df.columns:
