@@ -5,8 +5,8 @@ from subword_tokenizer import SubwordTokenizer
 from helpers import get_device
 from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
 from model import GPTLanguageModel
-from train_utils import base_train_model, max_vocab_size, train_chat_alignment
-from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME
+from train_utils import base_train_model, train_chat_alignment
+from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME, MAX_VOCAB_SIZE
 import logging
 from helpers import configure_colored_logging
 
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     
     # Load pre-trained model
     device = get_device()
-    model = GPTLanguageModel(max_vocab_size).to(device) #TODO: should be vocab_size
+    model = GPTLanguageModel(MAX_VOCAB_SIZE).to(device) #TODO: should be vocab_size
     
     # Try to load the best available model for fine-tuning
     model_loaded = False

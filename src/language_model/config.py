@@ -29,6 +29,16 @@ WARMUP_STEPS = 2000
 LR_DECAY = "cosine"
 TRAINING_START_TIME = "20250810-095241"  # Set to None to use current time, or specify a string like "20251001-120000"
 
+# Runtime configuration
+RUNTIME_OVERRIDES_FILE = "data/output/RUNTIME_OVERRIDES.json"
+
+# File monitoring constants
+MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
+STABLE_COUNT_THRESHOLD = 15
+
+# Default weight decay
+DEFAULT_WEIGHT_DECAY = 0.01
+
 import datetime
 def get_vocab_path():
 	folder = TRAINING_START_TIME if TRAINING_START_TIME else datetime.datetime.now().strftime('%Y%m%d-%H%M%S')

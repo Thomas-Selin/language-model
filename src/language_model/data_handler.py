@@ -3,6 +3,7 @@ from helpers import print_memory_usage, get_device, configure_colored_logging
 from subword_tokenizer import SubwordTokenizer
 import pandas as pd
 import torch
+from torch.amp import autocast
 import os
 import datetime
 import gc
@@ -384,3 +385,36 @@ def prepare_context_data_for_training(qa_parquet_path, output_parquet_path, text
     except Exception as e:
         logging.info(f"Error preparing context data: {e}")
         return False
+
+
+@torch.no_grad()
+def estimate_loss(model, train_data, val_data, eval_iters: int, block_size: int, batch_size: int) -> dict:
+    """
+    Estimate average train and validation loss over eval_iters batches.
+    
+    Args:
+        model: The language model
+        train_data: Training data tensor
+        val_data: Validation data tensor
+        eval_iters: Number of evaluation iterations
+        block_size: Block size for sequences
+        batch_size: Batch size
+        
+    Returns:
+        Dictionary with mean losses for 'train' and 'val'
+    """
+    out = {}
+    model.eval()
+    device = next(model.parameters()).device
+    
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        with autocast(device_type=device.type):
+            for k in range(eval_iters):
+                X, Y = get_batch(block_size, batch_size, split, train_data, val_data)
+                logits, loss = model(X, Y)
+                losses[k] = loss.item()
+        out[split] = losses.mean()
+    
+    model.train()
+    return out

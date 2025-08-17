@@ -1,5 +1,9 @@
 import torch
 import logging
+import os
+import json
+from torch.optim.lr_scheduler import LambdaLR
+import math
 
 class ColorFormatter(logging.Formatter):
     COLORS = {
@@ -87,3 +91,99 @@ def wait_for_keypress():
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters())
+
+
+def apply_runtime_overrides(optimizer, scheduler, params: dict, runtime_overrides_file: str) -> tuple[dict, dict]:
+    """
+    Reads runtime overrides JSON file and applies any overrides to optimizer/scheduler and params dict.
+    
+    Args:
+        optimizer: PyTorch optimizer
+        scheduler: Learning rate scheduler (unused but kept for compatibility)
+        params: Dictionary of training parameters
+        runtime_overrides_file: Path to the JSON file containing overrides
+        
+    Returns:
+        Tuple of (updated params dict, extra counters dict)
+    """
+    extra = {}
+    
+    if os.path.exists(runtime_overrides_file):
+        try:
+            with open(runtime_overrides_file, "r") as f:
+                overrides = json.load(f)
+                
+            # Iteration counters
+            if "global_iter" in overrides:
+                extra['global_iter'] = int(overrides["global_iter"])
+                logging.info(f"[RUNTIME] Set global_iter to {extra['global_iter']}")
+            if "total_epochs_run" in overrides:
+                extra['total_epochs_run'] = int(overrides["total_epochs_run"])
+                logging.info(f"[RUNTIME] Set total_epochs_run to {extra['total_epochs_run']}")
+                
+            # Optimizer parameters
+            if "learning_rate" in overrides:
+                lr = float(overrides["learning_rate"])
+                for g in optimizer.param_groups:
+                    g['lr'] = lr
+                params['learning_rate'] = lr
+                logging.info(f"[RUNTIME] Set learning rate to {lr}")
+                
+            if "weight_decay" in overrides:
+                wd = float(overrides["weight_decay"])
+                for g in optimizer.param_groups:
+                    g['weight_decay'] = wd
+                params['weight_decay'] = wd
+                logging.info(f"[RUNTIME] Set weight decay to {wd}")
+                
+            # Training parameters
+            for param_name in ["eval_interval", "batch_size", "block_size", "early_stopping_patience", "warmup_steps"]:
+                if param_name in overrides:
+                    value = int(overrides[param_name])
+                    if value > 0:
+                        params[param_name] = value
+                        logging.info(f"[RUNTIME] Set {param_name} to {value}")
+                        
+            # Float parameters
+            for param_name in ["grad_clip_norm", "dropout"]:
+                if param_name in overrides:
+                    value = float(overrides[param_name])
+                    params[param_name] = value
+                    logging.info(f"[RUNTIME] Set {param_name} to {value}")
+                    
+            # String parameters
+            if "lr_decay" in overrides:
+                lrd = str(overrides["lr_decay"])
+                params['lr_decay'] = lrd
+                logging.info(f"[RUNTIME] Set lr_decay to {lrd}")
+                
+        except Exception as e:
+            logging.warning(f"[RUNTIME] Failed to apply runtime overrides: {e}")
+            
+    return params, extra
+
+
+def get_lr_scheduler(optimizer, warmup_steps: int, lr_decay: str, total_steps: int) -> LambdaLR:
+    """
+    Create a learning rate scheduler with warmup and decay.
+    
+    Args:
+        optimizer: PyTorch optimizer
+        warmup_steps: Number of warmup steps
+        lr_decay: Type of decay ("linear", "cosine", or "none")
+        total_steps: Total number of training steps
+        
+    Returns:
+        LambdaLR scheduler
+    """
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        if lr_decay == "linear":
+            return max(0.0, 1.0 - progress)
+        elif lr_decay == "cosine":
+            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        else:
+            return 1.0
+    return LambdaLR(optimizer, lr_lambda)
