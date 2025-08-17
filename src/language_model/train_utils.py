@@ -20,7 +20,7 @@ import json
 
 # Magic numbers as constants
 MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
-STABLE_COUNT_THRESHOLD = 30
+STABLE_COUNT_THRESHOLD = 15
 
 # Configure logging
 configure_colored_logging(config.LOG_LEVEL)
@@ -319,20 +319,28 @@ def base_train_model(
                         next_file_name, max_vocab_size, next_file_dir, text_column, vocab_path, runtime_params['batch_size']
                     )
 
-                # Load current file (blocking)
-                train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
-                    vocab_size=max_vocab_size,
-                    parquet_dir_path=file_dir,
-                    text_column=text_column,
-                    vocab_path=vocab_path,
-                    batch_size=runtime_params['batch_size'],
-                    single_file=file_name
-                )
-
-                # If preloading was started, wait for it to finish and use the result for the next iteration
-                if preload_thread:
-                    preload_thread.join()
+                # Load current file (use preloaded data if available)
+                if preload_result and 'data' in preload_result:
                     train_data, val_data, tokenizer, vocab_size, _ = preload_result['data']
+                    logging.info(f"Using preloaded data for file: {file_name}")
+                else:
+                    train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
+                        vocab_size=max_vocab_size,
+                        parquet_dir_path=file_dir,
+                        text_column=text_column,
+                        vocab_path=vocab_path,
+                        batch_size=runtime_params['batch_size'],
+                        single_file=file_name
+                    )
+
+                # If preloading was started, wait for it to finish and prepare the next file
+                preload_thread, preload_result = None, None
+                if next_file:
+                    next_file_dir = os.path.dirname(next_file)
+                    next_file_name = os.path.basename(next_file)
+                    preload_thread, preload_result = preload_parquet(
+                        next_file_name, max_vocab_size, next_file_dir, text_column, vocab_path, runtime_params['batch_size']
+                    )
 
                 # Apply runtime overrides ONCE per file
                 runtime_params, extra_counters = apply_runtime_overrides(optimizer, None, runtime_params)
@@ -408,26 +416,27 @@ def base_train_model(
                             model.load_state_dict(torch.load(os.path.join(output_dir, "best_model.pt")))
                             break
                         logging.info(f"Current global_iter: {global_iter}")
-                        # Only log to TensorBoard every eval_interval * 5 steps or at the last step
+                        # Log to TensorBoard every eval step
                         if global_iter is not None:
-                            if (global_iter % (eval_interval * 5) == 0 or (iter == base_training_max_epochs - 1 and file_idx == len(parquet_files)-1)):
-                                logging.debug(f"Writing metrics and generated text to TensorBoard at step {global_iter}")
-                                writer.add_scalar('Loss/train', losses['train'], global_iter)
-                                writer.add_scalar('Loss/val', losses['val'], global_iter)
-                                writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'])), global_iter)
-                                writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'])), global_iter)
-                                if torch.cuda.is_available():
-                                    writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
-                                    writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
-                                    writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
-                                # Log parameter and gradient histograms less frequently
-                                if global_iter % (eval_interval * 10) == 0:
-                                    for name, param in model.named_parameters():
-                                        writer.add_histogram(f'Parameters/{name}', param, global_iter)
-                                        if param.grad is not None:
-                                            writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
-                                # Log generated text samples
+                            logging.debug(f"Writing metrics and generated text to TensorBoard at step {global_iter}")
+                            writer.add_scalar('Loss/train', losses['train'], global_iter)
+                            writer.add_scalar('Loss/val', losses['val'], global_iter)
+                            writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'])), global_iter)
+                            writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'])), global_iter)
+                            if torch.cuda.is_available():
+                                writer.add_scalar('Memory/allocated_GB', torch.cuda.memory_allocated() / 1024**3, global_iter)
+                                writer.add_scalar('Memory/reserved_GB', torch.cuda.memory_reserved() / 1024**3, global_iter)
+                                writer.add_scalar('Memory/free_GB', (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved()) / 1024**3, global_iter)
+                            # Log parameter and gradient histograms less frequently
+                            if global_iter % (eval_interval * 25) == 0:
+                                # Log generated text samples to TensorBoard
                                 log_generated_samples(model, tokenizer, writer, global_iter, device)
+                                logging.debug("Finished logging generated samples.")
+                                for name, param in model.named_parameters():
+                                    writer.add_histogram(f'Parameters/{name}', param, global_iter)
+                                    if param.grad is not None:
+                                        writer.add_histogram(f'Gradients/{name}', param.grad, global_iter)
+                            # writer.flush() # TODO: remove?
                     epoch_start_time = time.time()
                     data_time = time.time()
                     xb, yb = get_batch(block_size, batch_size, 'train', train_data, val_data)
@@ -451,6 +460,7 @@ def base_train_model(
                         writer.add_scalar('Total/EpochTime', epoch_duration, global_iter)
                         # logging.debug(f"Writing learning rate to TensorBoard: {scheduler.get_last_lr()[0]} at step {global_iter}")
                         writer.add_scalar('Learning Rate', scheduler.get_last_lr()[0], global_iter)
+                        # writer.flush() # TODO: remove?
                     if iter % eval_interval == 0:
                         logging.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.6f}")
                     if global_iter is not None:
@@ -669,6 +679,7 @@ def train_chat_alignment(
             if global_step % 100 == 0 or batch_idx == num_train_batches - 1:
                 writer.add_scalar('Loss/train', loss.item(), global_step)
                 log_generated_samples(model, tokenizer, writer, global_step, device)
+                # writer.flush() # TODO: remove?
             global_step += 1
             if batch_idx % 1000 == 0:
                 logging.info(f"  Train Batch {batch_idx+1}/{num_train_batches} - Batch Loss: {loss.item():.4f}")
@@ -690,6 +701,7 @@ def train_chat_alignment(
                 if global_step % 100 == 0 or batch_idx == num_val_batches - 1:
                     writer.add_scalar('Loss/val', loss.item(), global_step)
                     log_generated_samples(model, tokenizer, writer, global_step, device)
+                    # writer.flush() # TODO: remove?
                 global_step += 1
                 if batch_idx % 250 == 0:
                     logging.info(f"  Val Batch {batch_idx+1}/{num_val_batches} - Batch Loss: {loss.item():.4f}")
