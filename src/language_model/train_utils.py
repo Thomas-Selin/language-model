@@ -89,7 +89,9 @@ def base_train_model(
     trained_files = set()
     
     try:
+
         preloaded_data = None  # Store preloaded data from previous iteration
+        preload_thread, preload_result, next_file_name = None, None, None
         while True:
             parquet_files = get_parquet_files(parquet_dir_path)
             if not parquet_files:
@@ -101,26 +103,25 @@ def base_train_model(
                     trained_files.add(ready_file)
                 continue
 
-            # Process each file
-            for file_idx, parquet_file in enumerate(parquet_files):
+            file_count = len(parquet_files)
+            file_idx = 0
+            while file_idx < file_count:
+                parquet_file = parquet_files[file_idx]
                 file_name = os.path.basename(parquet_file)
                 if file_name in trained_files:
+                    file_idx += 1
                     continue
 
                 trained_files.add(file_name)
-
-                # Memory cleanup
                 _cleanup_memory()
+                logging.info(f"Processing file {file_idx+1}/{file_count}: {parquet_file}")
 
-                logging.info(f"Processing file {file_idx+1}/{len(parquet_files)}: {parquet_file}")
-
-                # Check if we have preloaded data for this file
+                # Use preloaded data if available
                 if preloaded_data and preloaded_data.get('file_name') == file_name:
                     logging.info(f"Using preloaded data for file: {file_name}")
                     train_data, val_data, tokenizer, vocab_size, _ = preloaded_data['data']
                     preloaded_data = None  # Clear preloaded data after use
                 else:
-                    # Load current file data normally
                     train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
                         vocab_size=config.MAX_VOCAB_SIZE,
                         parquet_dir_path=os.path.dirname(parquet_file),
@@ -130,17 +131,16 @@ def base_train_model(
                         single_file=file_name
                     )
 
-                # Start preloading the next file (if any)
-                next_file = parquet_files[file_idx + 1] if file_idx + 1 < len(parquet_files) else None
-                preload_thread, preload_result = None, None
+                # Start preloading the next file as soon as training for current file begins
+                next_file = parquet_files[file_idx + 1] if file_idx + 1 < file_count else None
                 next_file_name = None
-                if next_file:
+                if next_file and (preload_thread is None):
                     next_file_dir = os.path.dirname(next_file)
                     next_file_name = os.path.basename(next_file)
-                    if next_file_name not in trained_files:  # Only preload if not already processed
+                    if next_file_name not in trained_files:
                         logging.info(f"Starting preload of next file: {next_file_name}")
                         preload_thread, preload_result = preload_parquet_data(
-                            next_file_name, config.MAX_VOCAB_SIZE, next_file_dir, 
+                            next_file_name, config.MAX_VOCAB_SIZE, next_file_dir,
                             text_column, vocab_path, runtime_params['batch_size']
                         )
 
@@ -149,13 +149,11 @@ def base_train_model(
                     optimizer, None, runtime_params, config.RUNTIME_OVERRIDES_FILE
                 )
 
-                # Update counters
                 if 'global_iter' in extra_counters:
                     global_iter = extra_counters['global_iter']
                 if 'total_epochs_run' in extra_counters:
                     total_epochs_run = extra_counters['total_epochs_run']
 
-                # Log hyperparameters once
                 if not tensorboard_logged:
                     config_dict = {
                         'batch_size': runtime_params['batch_size'],
@@ -176,8 +174,6 @@ def base_train_model(
                     log_hyperparameters(writer, config_dict)
                     tensorboard_logged = True
 
-                # Train on this file
-                # Pass global_iter as a mutable object so it can be updated and persist across files
                 best_val_loss, global_iter = _train_on_file(
                     model, train_data, val_data, optimizer, scaler, writer,
                     runtime_params, global_iter, output_dir
@@ -186,13 +182,12 @@ def base_train_model(
                 # Wait for preloading to complete (if it was started)
                 if preload_thread is not None and next_file_name is not None:
                     logging.info("Waiting for next file preload to complete...")
-                    preload_thread.join()  # Wait for the preload thread to finish
+                    preload_thread.join()
                     if 'error' in preload_result:
                         logging.warning(f"Preload failed: {preload_result['error']}")
                         preloaded_data = None
                     elif 'data' in preload_result:
                         logging.info("Next file preload completed successfully")
-                        # Store preloaded data for next iteration
                         preloaded_data = {
                             'file_name': next_file_name,
                             'data': preload_result['data']
@@ -200,15 +195,16 @@ def base_train_model(
                     else:
                         logging.warning("Preload completed but no data found")
                         preloaded_data = None
+                    preload_thread, preload_result, next_file_name = None, None, None
 
-                # Clean up the processed file
                 cleanup_processed_file(parquet_file)
 
                 if total_epochs_run >= config.BASE_TRAINING_MAX_EPOCHS:
                     logging.info(f"Reached global epoch limit. Stopping training.")
                     break
 
-            # Wait for new files or stop signal
+                file_idx += 1
+
             user_interrupted, ready_file = wait_for_new_files_or_stop(parquet_dir_path, trained_files, stop_file_path)
             if user_interrupted:
                 break
