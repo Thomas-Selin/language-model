@@ -39,7 +39,7 @@ if __name__ == "__main__":
     else:
         checkpoint_path = None
     # Pass checkpoint_path to base_train_model (update base_train_model to accept this argument)
-    base_train_model(parquet_dir_path, text_column, vocab_path, training_start_time, output_dir=output_dir, checkpoint_path=checkpoint_path)
+    global_iter = base_train_model(parquet_dir_path, text_column, vocab_path, training_start_time, output_dir=output_dir, checkpoint_path=checkpoint_path)
 
     # Now process QA dataset for fine-tuning
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
@@ -83,15 +83,14 @@ if __name__ == "__main__":
     logging.info('Model ready for fine-tuning.')
     
     # Fine-tune on QA pairs
-    logging.info("\n=== Starting fine-tuning on QA pairs ===")
-    qa_logdir = os.path.join(output_dir, 'tensorboard_logs')
-    train_chat_alignment(
+    logging.info('\n=== Starting fine-tuning on QA pairs ===')
+    global_step = train_chat_alignment(
         model, 
         qa_tensor,
-        tensorboard_logdir=qa_logdir,
         output_dir=output_dir,
         lr=1e-4, 
         batch_size=4, 
-        val_split=0.1
+        val_split=0.1,
+        global_step=global_iter
     )
-    logging.info("Fine-tuning complete. Model ready for use.")
+    logging.info('Fine-tuning complete. Model ready for use.')

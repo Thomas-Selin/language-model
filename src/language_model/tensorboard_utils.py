@@ -95,14 +95,17 @@ def log_training_metrics(writer: SummaryWriter, losses: dict, global_iter: int, 
     
     Args:
         writer: TensorBoard writer
-        losses: Dictionary with 'train' and 'val' losses
+        losses: Dictionary with 'train' and optionally 'val' losses
         global_iter: Current global iteration
         lr: Current learning rate (optional)
     """
     writer.add_scalar('Loss/train', losses['train'], global_iter)
-    writer.add_scalar('Loss/val', losses['val'], global_iter)
-    writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'])), global_iter)
-    writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'])), global_iter)
+    writer.add_scalar('Perplexity/train', float(torch.exp(losses['train'].detach().clone() if torch.is_tensor(losses['train']) else torch.tensor(losses['train']))), global_iter)
+    
+    # Only log validation metrics if validation loss is provided and not 0
+    if 'val' in losses and losses['val'] != 0:
+        writer.add_scalar('Loss/val', losses['val'], global_iter)
+        writer.add_scalar('Perplexity/val', float(torch.exp(losses['val'].detach().clone() if torch.is_tensor(losses['val']) else torch.tensor(losses['val']))), global_iter)
     
     if lr is not None:
         writer.add_scalar('Learning Rate', lr, global_iter)

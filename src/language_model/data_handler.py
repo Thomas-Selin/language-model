@@ -155,7 +155,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
             file_path = os.path.join(parquet_dir_path, file)
             logging.info(f"Processing file {file_idx+1}/{len(first_batch)}: {file}")
             logging.debug(f"Chunk size: 100 rows")
-            max_retries = 65
+            max_retries = 1000
             retry_count = 0
             while retry_count <= max_retries:
                 try:
@@ -197,8 +197,8 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         logging.info(f"Max retries reached for file {file}, skipping.")
                         skipped_files.append(file)
                         break
-                    logging.info(f"Retrying file {file} in 10 minutes (attempt {retry_count}/{max_retries}) at {datetime.datetime.now().strftime('%H:%M')}")
-                    time.sleep(600)
+                    logging.info(f"Retrying file {file} in 1 minute (attempt {retry_count}/{max_retries}) at {datetime.datetime.now().strftime('%H:%M')}")
+                    time.sleep(60)
             logging.info("")
         if not chunk_tensors:
             logging.info(f"No tokens could be extracted from batch {first_batch_idx+1}. Skipped files: {skipped_files}")
