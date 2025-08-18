@@ -20,12 +20,18 @@ from tensorboard_utils import (
 import config
 import logging
 from subword_tokenizer import SubwordTokenizer
+import threading
 
 # Configure logging
 configure_colored_logging(config.LOG_LEVEL)
 
 # Set device
 device = get_device()
+
+# Add a lock for thread safety
+preload_lock = threading.Lock()
+
+# No retry logic needed - handle errors when joining the thread
 
 
 def base_train_model(
@@ -90,8 +96,7 @@ def base_train_model(
     
     try:
 
-        preloaded_data = None  # Store preloaded data from previous iteration
-        preload_thread, preload_result, next_file_name = None, None, None
+        preload_thread, preload_result, preload_file_name = None, None, None
         while True:
             parquet_files = get_parquet_files(parquet_dir_path)
             if not parquet_files:
@@ -116,12 +121,40 @@ def base_train_model(
                 _cleanup_memory()
                 logging.info(f"Processing file {file_idx+1}/{file_count}: {parquet_file}")
 
-                # Use preloaded data if available
-                if preloaded_data and preloaded_data.get('file_name') == file_name:
-                    logging.info(f"Using preloaded data for file: {file_name}")
-                    train_data, val_data, tokenizer, vocab_size, _ = preloaded_data['data']
-                    preloaded_data = None  # Clear preloaded data after use
+                # Check if we have preloaded data for this file
+                train_data, val_data, tokenizer, vocab_size = None, None, None, None
+                if preload_thread is not None and preload_file_name == file_name:
+                    logging.info(f"Waiting for preloaded data for file: {file_name}")
+                    preload_thread.join()
+                    with preload_lock:
+                        if 'error' in preload_result:
+                            logging.warning(f"Preload failed: {preload_result['error']}. Loading synchronously.")
+                            train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
+                                vocab_size=config.MAX_VOCAB_SIZE,
+                                parquet_dir_path=os.path.dirname(parquet_file),
+                                text_column=text_column,
+                                vocab_path=vocab_path,
+                                batch_size=runtime_params['batch_size'],
+                                single_file=file_name
+                            )
+                        elif 'data' in preload_result:
+                            logging.info("Using preloaded data successfully")
+                            train_data, val_data, tokenizer, vocab_size, _ = preload_result['data']
+                        else:
+                            logging.warning("Preload completed but no data found. Loading synchronously.")
+                            train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
+                                vocab_size=config.MAX_VOCAB_SIZE,
+                                parquet_dir_path=os.path.dirname(parquet_file),
+                                text_column=text_column,
+                                vocab_path=vocab_path,
+                                batch_size=runtime_params['batch_size'],
+                                single_file=file_name
+                            )
+                    # Reset preload state after using
+                    preload_thread, preload_result, preload_file_name = None, None, None
                 else:
+                    # No preloaded data available, load synchronously
+                    logging.info(f"Loading data synchronously for file: {file_name}")
                     train_data, val_data, tokenizer, vocab_size, _ = load_and_process_data(
                         vocab_size=config.MAX_VOCAB_SIZE,
                         parquet_dir_path=os.path.dirname(parquet_file),
@@ -131,10 +164,9 @@ def base_train_model(
                         single_file=file_name
                     )
 
-                # Start preloading the next file as soon as training for current file begins
+                # Start preloading the next file immediately (true parallelism)
                 next_file = parquet_files[file_idx + 1] if file_idx + 1 < file_count else None
-                next_file_name = None
-                if next_file and (preload_thread is None):
+                if next_file and preload_thread is None:
                     next_file_dir = os.path.dirname(next_file)
                     next_file_name = os.path.basename(next_file)
                     if next_file_name not in trained_files:
@@ -143,6 +175,7 @@ def base_train_model(
                             next_file_name, config.MAX_VOCAB_SIZE, next_file_dir,
                             text_column, vocab_path, runtime_params['batch_size']
                         )
+                        preload_file_name = next_file_name
 
                 # Apply runtime overrides
                 runtime_params, extra_counters = apply_runtime_overrides(
@@ -179,23 +212,7 @@ def base_train_model(
                     runtime_params, global_iter, output_dir
                 )
 
-                # Wait for preloading to complete (if it was started)
-                if preload_thread is not None and next_file_name is not None:
-                    logging.info("Waiting for next file preload to complete...")
-                    preload_thread.join()
-                    if 'error' in preload_result:
-                        logging.warning(f"Preload failed: {preload_result['error']}")
-                        preloaded_data = None
-                    elif 'data' in preload_result:
-                        logging.info("Next file preload completed successfully")
-                        preloaded_data = {
-                            'file_name': next_file_name,
-                            'data': preload_result['data']
-                        }
-                    else:
-                        logging.warning("Preload completed but no data found")
-                        preloaded_data = None
-                    preload_thread, preload_result, next_file_name = None, None, None
+                # The preloading continues in parallel during training - no blocking here!
 
                 cleanup_processed_file(parquet_file)
 
@@ -216,6 +233,10 @@ def base_train_model(
         torch.save(model.state_dict(), os.path.join(output_dir, "model_error.pt"))
         logging.info("Model saved to model_error.pt due to error")
     finally:
+        # Clean up any running preload thread
+        if preload_thread is not None and preload_thread.is_alive():
+            logging.info("Waiting for preload thread to finish before exit...")
+            preload_thread.join()
         if writer:
             writer.close()
     return global_iter
