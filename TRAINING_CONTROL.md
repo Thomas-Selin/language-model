@@ -52,4 +52,4 @@ touch data/output/STOP_TRAINING
 ## File locations
 
 - **Stop file**: `data/output/STOP_TRAINING` (created when you want to stop)
-- **Best model**: `data/output/best_model.pt` (saved during training)
+- **Best model**: `data/output/best_model_resized_vocab_12856.pt` (saved during training)

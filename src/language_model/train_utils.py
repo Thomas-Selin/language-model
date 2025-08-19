@@ -4,7 +4,6 @@ from torch.amp import autocast, GradScaler
 import gc
 import os
 import time
-import datetime
 from helpers import configure_colored_logging, print_memory_usage, get_device, count_parameters
 from helpers import apply_runtime_overrides, get_lr_scheduler
 from data_handler import estimate_loss, load_and_process_data, get_batch
@@ -31,8 +30,45 @@ device = get_device()
 # Add a lock for thread safety
 preload_lock = threading.Lock()
 
-# No retry logic needed - handle errors when joining the thread
+def optimize_memory_settings():
+    """Configure optimal memory settings for training"""
+    # Enable memory-efficient attention if available
+    if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+        torch.backends.cuda.enable_flash_sdp(True)
+    
+    # Set memory fraction to leave some headroom
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(0.90)  # Use 90% of GPU memory max
+    
+    # Enable cudNN benchmark for consistent input sizes
+    torch.backends.cudnn.benchmark = True
+    
+    logging.info("Memory optimization settings applied")
 
+def aggressive_memory_cleanup():
+    """Aggressive memory cleanup between training steps"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()  # Ensure all operations complete
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+def log_memory_usage(step_name="", global_iter=None):
+    """Log current memory usage for debugging"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1e9
+        reserved = torch.cuda.memory_reserved() / 1e9
+        max_allocated = torch.cuda.max_memory_allocated() / 1e9
+        
+        step_info = f"[Step {global_iter}] " if global_iter else ""
+        logging.debug(f"{step_info}GPU Memory {step_name}: Alloc={allocated:.2f}GB, Reserved={reserved:.2f}GB, Max={max_allocated:.2f}GB")
+        
+        # Warning if memory usage is high
+        if allocated > 18.0:  # > 18GB on 24GB GPU
+            logging.warning(f"High GPU memory usage detected: {allocated:.2f}GB allocated")
+        if reserved > 20.0:  # > 20GB reserved
+            logging.warning(f"High reserved GPU memory: {reserved:.2f}GB reserved")
 
 def base_train_model(
     parquet_dir_path: str,
@@ -55,6 +91,11 @@ def base_train_model(
     # Initialize TensorBoard
     writer = setup_tensorboard_logging(output_dir)
     
+    # Apply memory optimizations
+    optimize_memory_settings()
+
+    config.MAX_VOCAB_SIZE = 12856
+
     # Create model
     model = GPTLanguageModel(config.MAX_VOCAB_SIZE).to(device)
     if checkpoint_path and os.path.exists(checkpoint_path):
@@ -88,7 +129,10 @@ def base_train_model(
         'early_stopping_patience': config.EARLY_STOPPING_PATIENCE,
         'warmup_steps': config.WARMUP_STEPS,
         'lr_decay': config.LR_DECAY,
-        'learning_rate': config.LEARNING_RATE
+        'learning_rate': config.LEARNING_RATE,
+        'base_training_max_epochs': config.BASE_TRAINING_MAX_EPOCHS,
+        'finetuning_max_epochs': config.FINETUNING_MAX_EPOCHS,
+        'log_level': config.LOG_LEVEL
     }
     
     stop_file_path = "data/output/STOP_TRAINING"
@@ -119,7 +163,13 @@ def base_train_model(
 
                 trained_files.add(file_name)
                 _cleanup_memory()
-                logging.info(f"Processing file {file_idx+1}/{file_count}: {parquet_file}")
+                
+                # ==================== TRAINING START DIVIDER ====================
+                logging.info("\n" + "="*80)
+                logging.info(f"\033[96m🚀 STARTING TRAINING ON FILE {file_idx+1}/{file_count}\033[0m")
+                logging.info(f"\033[96m📁 FILE: {os.path.basename(parquet_file)}\033[0m")
+                logging.info(f"\033[96m📂 PATH: {parquet_file}\033[0m")
+                logging.info("="*80 + "\n")
 
                 # Check if we have preloaded data for this file
                 train_data, val_data, tokenizer, vocab_size = None, None, None, None
@@ -191,7 +241,7 @@ def base_train_model(
                     config_dict = {
                         'batch_size': runtime_params['batch_size'],
                         'block_size': runtime_params['block_size'],
-                        'max_epochs': config.BASE_TRAINING_MAX_EPOCHS,
+                        'max_epochs': runtime_params['base_training_max_epochs'],
                         'eval_interval': runtime_params['eval_interval'],
                         'learning_rate': runtime_params['learning_rate'],
                         'eval_iters': config.EVAL_ITERS,
@@ -212,11 +262,19 @@ def base_train_model(
                     runtime_params, global_iter, output_dir
                 )
 
+                # ==================== TRAINING COMPLETION DIVIDER ====================
+                logging.info("\n" + "="*80)
+                logging.info(f"\033[92m✅ COMPLETED TRAINING ON FILE {file_idx+1}/{file_count}\033[0m")
+                logging.info(f"\033[92m📁 FILE: {os.path.basename(parquet_file)}\033[0m")
+                logging.info(f"\033[92m🎯 BEST VALIDATION LOSS: {best_val_loss:.4f}\033[0m")
+                logging.info(f"\033[92m🔢 GLOBAL ITERATION: {global_iter}\033[0m")
+                logging.info("="*80 + "\n")
+
                 # The preloading continues in parallel during training - no blocking here!
 
                 cleanup_processed_file(parquet_file)
 
-                if total_epochs_run >= config.BASE_TRAINING_MAX_EPOCHS:
+                if total_epochs_run >= runtime_params['base_training_max_epochs']:
                     logging.info(f"Reached global epoch limit. Stopping training.")
                     break
 
@@ -244,11 +302,7 @@ def base_train_model(
 
 def _cleanup_memory():
     """Clean up memory between file processing."""
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    if hasattr(torch, "mps") and torch.backends.mps.is_available():
-        torch.mps.empty_cache()
+    aggressive_memory_cleanup()
 
 
 def _train_on_file(model, train_data, val_data, optimizer, scaler, writer, 
@@ -258,24 +312,27 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
     epochs_without_improvement = 0
 
     # Setup scheduler for this file
-    steps_per_file = config.BASE_TRAINING_MAX_EPOCHS
+    steps_per_file = runtime_params['base_training_max_epochs']
     warmup_steps_local = max(1, int(0.02 * steps_per_file))
     scheduler = get_lr_scheduler(optimizer, warmup_steps_local,
                                runtime_params['lr_decay'], steps_per_file)
 
-    for iter in range(config.BASE_TRAINING_MAX_EPOCHS):
+    for iter in range(runtime_params['base_training_max_epochs']):
         # Evaluation
-        if iter % runtime_params['eval_interval'] == 0 or iter == config.BASE_TRAINING_MAX_EPOCHS - 1:
+        if iter % runtime_params['eval_interval'] == 0 or iter == runtime_params['base_training_max_epochs'] - 1:
+            log_memory_usage("before_eval", global_iter)
+            
             losses = estimate_loss(model, train_data, val_data, config.EVAL_ITERS,
                                  runtime_params['block_size'], runtime_params['batch_size'])
 
             logging.info(f"Step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+            log_memory_usage("after_eval", global_iter)
 
             # Save best model
             if losses['val'] < best_val_loss:
                 logging.info(f"Validation loss improved. Saving best model.")
                 best_val_loss = losses['val']
-                torch.save(model.state_dict(), os.path.join(output_dir, "best_model.pt"))
+                torch.save(model.state_dict(), os.path.join(output_dir, "best_model_resized_vocab_12856.pt"))
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
@@ -283,32 +340,57 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
             # Early stopping check
             if epochs_without_improvement >= runtime_params['early_stopping_patience']:
                 logging.info(f"Early stopping triggered. Best val loss: {best_val_loss:.4f}")
-                model.load_state_dict(torch.load(os.path.join(output_dir, "best_model.pt")))
+                model.load_state_dict(torch.load(os.path.join(output_dir, "best_model_resized_vocab_12856.pt")))
                 break
 
             # Log to TensorBoard
             if global_iter is not None:
+                log_memory_usage("before_tensorboard", global_iter)
                 log_training_metrics(writer, losses, global_iter, scheduler.get_last_lr()[0])
+                log_memory_usage("after_tensorboard", global_iter)
 
                 # Log samples and parameters periodically
                 if global_iter % (runtime_params['eval_interval'] * 25) == 0:
                     tokenizer = SubwordTokenizer(vocab_file=config.VOCAB_PATH)
                     log_generated_samples(model, tokenizer, writer, global_iter, device)
                     log_model_parameters(writer, model, global_iter)
+                    
+                # Aggressive cleanup after TensorBoard logging (where OOM occurred)
+                aggressive_memory_cleanup()
+                log_memory_usage("after_cleanup", global_iter)
 
-        # Training step
+        # Training step with gradient accumulation
         epoch_start_time = time.time()
-        xb, yb = get_batch(runtime_params['block_size'], runtime_params['batch_size'],
-                          'train', train_data, val_data)
+        
+        # Get gradient accumulation steps from config
+        gradient_accumulation_steps = getattr(config, 'GRADIENT_ACCUMULATION_STEPS', 1)
+        effective_batch_size = runtime_params['batch_size'] * gradient_accumulation_steps
+        
+        optimizer.zero_grad(set_to_none=True)
+        total_loss = 0.0
+        
+        for micro_step in range(gradient_accumulation_steps):
+            xb, yb = get_batch(runtime_params['block_size'], runtime_params['batch_size'],
+                              'train', train_data, val_data)
 
-        with autocast(device_type=device.type):
-            logits, loss = model(xb, yb)
+            with autocast(device_type=device.type):
+                logits, loss = model(xb, yb)
+                # Scale loss by accumulation steps
+                loss = loss / gradient_accumulation_steps
 
-        scaler.scale(loss).backward()
+            scaler.scale(loss).backward()
+            total_loss += loss.item() * gradient_accumulation_steps  # Unscale for logging
+            
+            # Clean up intermediate tensors
+            del xb, yb, logits
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        # Gradient clipping and optimizer step
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=runtime_params['grad_clip_norm'])
         scaler.step(optimizer)
         scaler.update()
-        optimizer.zero_grad(set_to_none=True)
 
         scheduler.step()
 
@@ -318,11 +400,9 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
             log_epoch_time(writer, epoch_duration, global_iter)
             global_iter += 1
 
-        # Memory cleanup
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        if global_iter is not None and global_iter % 5 == 0:
-            gc.collect()
+        # Aggressive memory cleanup every few steps
+        if global_iter is not None and global_iter % 3 == 0:
+            aggressive_memory_cleanup()
 
     return best_val_loss, global_iter
 
@@ -334,7 +414,8 @@ def train_chat_alignment(
     lr: float = 1e-4,
     batch_size: int = None,
     val_split: float = 0.1,
-    global_step: int = 0
+    global_step: int = 0,
+    runtime_params: dict = None
 ) -> int:
     """
     Finetune model for chat alignment using QA tensor data.
@@ -342,8 +423,14 @@ def train_chat_alignment(
     if batch_size is None:
         batch_size = config.BATCH_SIZE
         
+    # Use runtime parameters for finetuning max epochs if provided
+    if runtime_params and 'finetuning_max_epochs' in runtime_params:
+        epochs = runtime_params['finetuning_max_epochs']
+        logging.info(f"Using runtime override for finetuning_max_epochs: {epochs}")
+    else:
+        epochs = config.FINETUNING_MAX_EPOCHS
+        
     os.makedirs(output_dir, exist_ok=True)
-    epochs = config.FINETUNING_MAX_EPOCHS
     model.train()
     device = next(model.parameters()).device
     
@@ -370,6 +457,17 @@ def train_chat_alignment(
     current_val_loss = None  # Track current validation loss
     
     logging.info(f"Total samples: {num_samples}, Train: {train_tensor.size(0)}, Val: {val_tensor.size(0)}")
+    
+    # ==================== FINE-TUNING START DIVIDER ====================
+    logging.info("\n" + "="*80)
+    logging.info(f"\033[93m🎯 STARTING CHAT ALIGNMENT FINE-TUNING\033[0m")
+    logging.info(f"\033[93m⏰ START TIME: {time.strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
+    logging.info(f"\033[93m📊 TOTAL SAMPLES: {num_samples:,}\033[0m")
+    logging.info(f"\033[93m🏋️  TRAIN SAMPLES: {train_tensor.size(0):,}\033[0m")
+    logging.info(f"\033[93m✅ VAL SAMPLES: {val_tensor.size(0):,}\033[0m")
+    logging.info(f"\033[93m🔄 EPOCHS: {epochs}\033[0m")
+    logging.info(f"\033[93m📈 TOTAL STEPS: {total_steps:,}\033[0m")
+    logging.info("="*80 + "\n")
     
     tokenizer = SubwordTokenizer(vocab_file=config.VOCAB_PATH)
     writer = setup_tensorboard_logging(output_dir)
@@ -449,6 +547,14 @@ def train_chat_alignment(
         if epochs_without_improvement >= patience:
             logging.info("Early stopping triggered for chat alignment.")
             break
+    
+    # ==================== FINE-TUNING COMPLETION DIVIDER ====================
+    logging.info("\n" + "="*80)
+    logging.info(f"\033[92m🎉 COMPLETED CHAT ALIGNMENT FINE-TUNING\033[0m")
+    logging.info(f"\033[92m🏆 BEST VALIDATION LOSS: {best_val_loss:.4f}\033[0m")
+    logging.info(f"\033[92m🔢 FINAL GLOBAL STEP: {global_step:,}\033[0m")
+    logging.info(f"\033[92m📊 EPOCHS COMPLETED: {epoch+1}/{epochs}\033[0m")
+    logging.info("="*80 + "\n")
     
     # Save final model
     torch.save(model.state_dict(), os.path.join(output_dir, "chat_aligned_model.pt"))

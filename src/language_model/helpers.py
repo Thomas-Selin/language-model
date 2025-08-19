@@ -20,10 +20,44 @@ class ColorFormatter(logging.Formatter):
         return super().format(record)
 
 def configure_colored_logging(level):
-    formatter = ColorFormatter('[%(levelname_colored)s] %(message)s')
+    formatter = ColorFormatter('[%(levelname_colored)s] [%(threadName)s] %(message)s')
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     logging.basicConfig(level=level, handlers=[handler])
+
+
+def update_log_level(new_level: str):
+    """
+    Dynamically update the logging level during runtime.
+    
+    Args:
+        new_level: New logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    """
+    try:
+        # Convert string to logging level
+        level_map = {
+            'DEBUG': logging.DEBUG,
+            'INFO': logging.INFO,
+            'WARNING': logging.WARNING,
+            'ERROR': logging.ERROR,
+            'CRITICAL': logging.CRITICAL
+        }
+        
+        if new_level.upper() in level_map:
+            numeric_level = level_map[new_level.upper()]
+            
+            # Update the root logger level
+            logging.getLogger().setLevel(numeric_level)
+            
+            # Update all existing handlers
+            for handler in logging.getLogger().handlers:
+                handler.setLevel(numeric_level)
+                
+            logging.info(f"[RUNTIME] Log level changed to {new_level.upper()}")
+        else:
+            logging.warning(f"[RUNTIME] Invalid log level: {new_level}. Valid levels: DEBUG, INFO, WARNING, ERROR, CRITICAL")
+    except Exception as e:
+        logging.error(f"[RUNTIME] Failed to update log level: {e}")
 
 def get_device():
     if torch.cuda.is_available():
@@ -137,7 +171,7 @@ def apply_runtime_overrides(optimizer, scheduler, params: dict, runtime_override
                 logging.info(f"[RUNTIME] Set weight decay to {wd}")
                 
             # Training parameters
-            for param_name in ["eval_interval", "batch_size", "block_size", "early_stopping_patience", "warmup_steps"]:
+            for param_name in ["eval_interval", "batch_size", "block_size", "early_stopping_patience", "warmup_steps", "base_training_max_epochs", "finetuning_max_epochs"]:
                 if param_name in overrides:
                     value = int(overrides[param_name])
                     if value > 0:
@@ -156,6 +190,12 @@ def apply_runtime_overrides(optimizer, scheduler, params: dict, runtime_override
                 lrd = str(overrides["lr_decay"])
                 params['lr_decay'] = lrd
                 logging.info(f"[RUNTIME] Set lr_decay to {lrd}")
+                
+            # Log level parameter
+            if "log_level" in overrides:
+                new_log_level = str(overrides["log_level"]).upper()
+                update_log_level(new_log_level)
+                params['log_level'] = new_log_level
                 
         except Exception as e:
             logging.warning(f"[RUNTIME] Failed to apply runtime overrides: {e}")

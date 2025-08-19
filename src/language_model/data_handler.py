@@ -179,7 +179,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
                         if (i // chunk_size_rows) % 100 == 0:
                             percent_done = end_idx / len(df) * 100
                             thread_label = threading.current_thread().name
-                            print(f"[{thread_label}] Processing {file}: {percent_done:.1f}% done")
+                            logging.debug(f"[{thread_label}] Processing {file}: {percent_done:.1f}% done")
                             if (i // chunk_size_rows) % 50 == 0:
                                 gc.collect()
                     del df
