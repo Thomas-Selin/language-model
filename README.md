@@ -1,30 +1,27 @@
 # Language model
 
 
-This project builds a language model.
+In this project I builds a language model and is a part of the course "Deep Learning - methods and applications" at Umeå Unversity the year 2025
 
-The project is based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Portions of the original code have been modified and many additional features has been added.
+The beginning of the project was based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Most of the original code have been modified and many additional features has been added.
 
 
 ## Training data
 
-Pre training/base training was done using a 3 dataset....
-Specify which collumns are used in each dataset
+Pre training/base training was done using a 3 datasets.
 
+TODO for README:
 
-Finallly chat alignment fine tuning was done using....
-
-Recommend the use of tmux
-
-Describe training process, incl. gpu
-
-Created in the course ...
-
-# Scripts for training. sync, upload, stop etc.
+- Specify datasets
+- Specify which collumns are used in each dataset
+- Finallly chat alignment fine tuning was done using....
+- Recommend the use of tmux
+- Describe training process, incl. GPU usage
+- Created in the course ...
+- Document scripts/methoods for adjusting training. sync, upload, stop etc.
 
 
 ## How to run
-
 
 1. Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment
 2. Change venv's python version e.g.: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
