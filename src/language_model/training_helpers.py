@@ -62,9 +62,7 @@ def wait_for_new_files_or_stop(parquet_dir_path: str, trained_files: Set[str],
     
     Args:
         parquet_dir_path: Directory to monitor for parquet files
-        trained_files: Set of files already used for training
         stop_file_path: Path to stop signal file
-        
     Returns:
         Tuple of (user_interrupted, ready_file_name)
     """
@@ -84,7 +82,6 @@ def wait_for_new_files_or_stop(parquet_dir_path: str, trained_files: Set[str],
     
     size_state = {}
     check_counter = 0
-    
     while True:
         # Check for stop file first
         if os.path.exists(stop_file_path):
@@ -93,28 +90,24 @@ def wait_for_new_files_or_stop(parquet_dir_path: str, trained_files: Set[str],
             logging.info("Removing stop file and proceeding to save model...")
             os.remove(stop_file_path)
             return True, None
-        
+
         # Check for new files
-        current_files = set(f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet'))
-        new_files = current_files - trained_files
-        
-        if new_files:
-            for file in new_files:
-                file_path = os.path.join(parquet_dir_path, file)
-                if is_file_ready_for_training(file_path, config.MIN_FILE_SIZE_BYTES, 
-                                            config.STABLE_COUNT_THRESHOLD, size_state):
-                    logging.info(f"New file detected and size stabilized (>={config.MIN_FILE_SIZE_BYTES/1024/1024:.1f} MB): "
-                               f"{file} ({os.path.getsize(file_path)/1024/1024:.1f} MB)")
-                    logging.info(f"File '{file}' appears to have finished uploading. "
-                               "Resuming training with new file...")
-                    return False, file
-        
+        current_files = [f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet')]
+        for file in current_files:
+            file_path = os.path.join(parquet_dir_path, file)
+            if is_file_ready_for_training(file_path, config.MIN_FILE_SIZE_BYTES,
+                                         config.STABLE_COUNT_THRESHOLD, size_state):
+                logging.info(f"File detected and size stabilized (>={config.MIN_FILE_SIZE_BYTES/1024/1024:.1f} MB): "
+                             f"{file} ({os.path.getsize(file_path)/1024/1024:.1f} MB)")
+                logging.info(f"File '{file}' appears to have finished uploading. "
+                             "Resuming training with file...")
+                return False, file
+
         # Show periodic status
         if check_counter % 300 == 0:
-            logging.debug(f"Current .parquet files detected: {current_files}")
-            logging.debug(f"New files since last training: {new_files}")
+            logging.debug(f"Current .parquet files detected: {set(current_files)}")
             logging.debug("Still waiting... (Create 'data/output/STOP_TRAINING' file to stop)")
-        
+
         check_counter += 1
         time.sleep(10)
 
@@ -138,6 +131,8 @@ def preload_parquet_data(parquet_file: str, vocab_size: int, parquet_dir_path: s
     result = {}
     
     def loader():
+        thread_name = threading.current_thread().name
+        logging.info(f"[Thread {thread_name}] Starting preload for {parquet_file}")
         try:
             result['data'] = load_and_process_data(
                 vocab_size=vocab_size,
@@ -147,8 +142,9 @@ def preload_parquet_data(parquet_file: str, vocab_size: int, parquet_dir_path: s
                 batch_size=batch_size,
                 single_file=parquet_file
             )
+            logging.info(f"[Thread {thread_name}] Finished preload for {parquet_file}")
         except Exception as e:
-            logging.error(f"Error preloading {parquet_file}: {e}")
+            logging.error(f"[Thread {thread_name}] Error preloading {parquet_file}: {e}")
             result['error'] = str(e)
     
     thread = threading.Thread(target=loader)
@@ -186,7 +182,7 @@ def get_parquet_files(parquet_dir_path: str) -> list:
     """
     return sorted(
         glob.glob(os.path.join(parquet_dir_path, '*.parquet')),
-        key=lambda x: os.path.basename(x)
+        key=lambda x: os.path.getctime(x)
     )
 
 

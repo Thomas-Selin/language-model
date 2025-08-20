@@ -53,7 +53,7 @@ def update_log_level(new_level: str):
             for handler in logging.getLogger().handlers:
                 handler.setLevel(numeric_level)
                 
-            logging.info(f"[RUNTIME] Log level changed to {new_level.upper()}")
+            logging.info(f"[RUNTIME] Log level set to {new_level.upper()}")
         else:
             logging.warning(f"[RUNTIME] Invalid log level: {new_level}. Valid levels: DEBUG, INFO, WARNING, ERROR, CRITICAL")
     except Exception as e:

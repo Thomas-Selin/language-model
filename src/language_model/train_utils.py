@@ -136,34 +136,28 @@ def base_train_model(
     }
     
     stop_file_path = "data/output/STOP_TRAINING"
-    trained_files = set()
     
     try:
-
         preload_thread, preload_result, preload_file_name = None, None, None
         while True:
             parquet_files = get_parquet_files(parquet_dir_path)
             if not parquet_files:
                 logging.info(f"No parquet files found in {parquet_dir_path}. Waiting for new files...")
-                user_interrupted, ready_file = wait_for_new_files_or_stop(parquet_dir_path, trained_files, stop_file_path)
+                user_interrupted, _ = wait_for_new_files_or_stop(parquet_dir_path, stop_file_path)
                 if user_interrupted:
                     break
-                if ready_file:
-                    trained_files.add(ready_file)
                 continue
+
+            # Sort files by creation time (oldest first)
+            parquet_files = sorted(parquet_files, key=lambda f: os.path.getctime(f))
 
             file_count = len(parquet_files)
             file_idx = 0
             while file_idx < file_count:
                 parquet_file = parquet_files[file_idx]
                 file_name = os.path.basename(parquet_file)
-                if file_name in trained_files:
-                    file_idx += 1
-                    continue
-
-                trained_files.add(file_name)
                 _cleanup_memory()
-                
+                file_start_time = time.time()
                 # ==================== TRAINING START DIVIDER ====================
                 logging.info("\n" + "="*80)
                 logging.info(f"\033[96m🚀 STARTING TRAINING ON FILE {file_idx+1}/{file_count}\033[0m")
@@ -219,13 +213,12 @@ def base_train_model(
                 if next_file and preload_thread is None:
                     next_file_dir = os.path.dirname(next_file)
                     next_file_name = os.path.basename(next_file)
-                    if next_file_name not in trained_files:
-                        logging.info(f"Starting preload of next file: {next_file_name}")
-                        preload_thread, preload_result = preload_parquet_data(
-                            next_file_name, config.MAX_VOCAB_SIZE, next_file_dir,
-                            text_column, vocab_path, runtime_params['batch_size']
-                        )
-                        preload_file_name = next_file_name
+                    logging.info(f"Starting preload of next file: {next_file_name}")
+                    preload_thread, preload_result = preload_parquet_data(
+                        next_file_name, config.MAX_VOCAB_SIZE, next_file_dir,
+                        text_column, vocab_path, runtime_params['batch_size']
+                    )
+                    preload_file_name = next_file_name
 
                 # Apply runtime overrides
                 runtime_params, extra_counters = apply_runtime_overrides(
@@ -268,9 +261,10 @@ def base_train_model(
                 logging.info(f"\033[92m📁 FILE: {os.path.basename(parquet_file)}\033[0m")
                 logging.info(f"\033[92m🎯 BEST VALIDATION LOSS: {best_val_loss:.4f}\033[0m")
                 logging.info(f"\033[92m🔢 GLOBAL ITERATION: {global_iter}\033[0m")
+                file_end_time = time.time()
+                file_duration = file_end_time - file_start_time
+                logging.info(f"\033[92m⏰ TOTAL DURATION: {file_duration:.2f} seconds ({file_duration/60:.2f} min)\033[0m")
                 logging.info("="*80 + "\n")
-
-                # The preloading continues in parallel during training - no blocking here!
 
                 cleanup_processed_file(parquet_file)
 
@@ -280,11 +274,9 @@ def base_train_model(
 
                 file_idx += 1
 
-            user_interrupted, ready_file = wait_for_new_files_or_stop(parquet_dir_path, trained_files, stop_file_path)
+            user_interrupted, _ = wait_for_new_files_or_stop(parquet_dir_path, stop_file_path)
             if user_interrupted:
                 break
-            if ready_file:
-                trained_files.add(ready_file)
 
     except Exception as e:
         logging.error(f"An error occurred during training: {e}")
@@ -325,7 +317,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
             losses = estimate_loss(model, train_data, val_data, config.EVAL_ITERS,
                                  runtime_params['block_size'], runtime_params['batch_size'])
 
-            logging.info(f"Step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+            logging.info(f"Step {iter}: train loss {losses['train']:.4f}, val loss 📉 {losses['val']:.4f}")
             log_memory_usage("after_eval", global_iter)
 
             # Save best model

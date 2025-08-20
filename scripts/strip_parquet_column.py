@@ -2,16 +2,21 @@
 
 import os
 import sys
-import pandas as pd
+import pyarrow.parquet as pq
+import pyarrow as pa
 
 def strip_parquet_column(input_path, output_folder, keep_column):
-    # Load only the desired column
-    df = pd.read_parquet(input_path, columns=[keep_column])
-    # Prepare output path
     os.makedirs(output_folder, exist_ok=True)
     output_path = os.path.join(output_folder, os.path.basename(input_path))
-    # Save to new parquet file
-    df.to_parquet(output_path, index=False)
+    pf = pq.ParquetFile(input_path)
+    writer = None
+    for rg in range(pf.num_row_groups):
+        table = pf.read_row_group(rg, columns=[keep_column])
+        if writer is None:
+            writer = pq.ParquetWriter(output_path, table.schema)
+        writer.write_table(table)
+    if writer:
+        writer.close()
     print(f"Saved stripped parquet to: {output_path}")
 
 if __name__ == "__main__":

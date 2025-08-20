@@ -65,15 +65,16 @@ def load_text_from_parquet(parquet_file, text_column='text'):
 
 def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', vocab_path='data/output/vocab_subword.json', batch_size=10, single_file=None):
     """Load and process text data from multiple parquet files in batches for training, or a single file if specified."""
+    thread_label = threading.current_thread().name
     tokenizer_path = vocab_path
     if single_file is not None:
         # Only process the specified file
         all_parquet_files = [single_file]
-        logging.info(f"Processing single parquet file: {single_file}")
+        logging.info(f"[{thread_label}] Processing single parquet file: {single_file}")
     else:
         # List all parquet files in the directory
         all_parquet_files = [f for f in os.listdir(parquet_dir_path) if f.endswith('.parquet')]
-        logging.info(f"Found {len(all_parquet_files)} parquet files in {parquet_dir_path}")
+        logging.info(f"[{thread_label}] Found {len(all_parquet_files)} parquet files in {parquet_dir_path}")
         
         # Sort the files to process them in a consistent order
         all_parquet_files.sort()
@@ -83,7 +84,7 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
     if len(all_parquet_files) % batch_size > 0:
         total_batches += 1
     
-    logging.info(f"Will process files in {total_batches} batches of up to {batch_size} files each")
+    logging.info(f"[{thread_label}] Will process files in {total_batches} batches of up to {batch_size} files each")
     
     # Only build vocab if it doesn't exist
     first_batch_idx = 0
