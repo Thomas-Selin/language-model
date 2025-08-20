@@ -1,7 +1,7 @@
-# Language model
+# Language model project, Umeå University 2025
 
 
-In this project I builds a language model and is a part of the course "Deep Learning - methods and applications" at Umeå Unversity the year 2025
+In this project I build a language model and is a part of the course "Deep Learning - methods and applications" at Umeå Unversity the year 2025
 
 The beginning of the project was based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Most of the original code have been modified and many additional features has been added.
 
