@@ -55,8 +55,7 @@ def is_file_ready_for_training(file_path: str, min_size_bytes: int, stable_count
     return stable_count >= stable_count_threshold
 
 
-def wait_for_new_files_or_stop(parquet_dir_path: str, trained_files: Set[str], 
-                              stop_file_path: str) -> Tuple[bool, Optional[str]]:
+def wait_for_new_files_or_stop(parquet_dir_path: str, stop_file_path: str) -> Tuple[bool, Optional[str]]:
     """
     Wait for new parquet files or stop signal.
     

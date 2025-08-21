@@ -160,7 +160,8 @@ def base_train_model(
                 file_start_time = time.time()
                 # ==================== TRAINING START DIVIDER ====================
                 logging.info("\n" + "="*80)
-                logging.info(f"\033[96m🚀 STARTING TRAINING ON FILE {file_idx+1}/{file_count}\033[0m")
+                current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+                logging.info(f"\033[96m🚀 STARTING TRAINING ON FILE {file_idx+1}/{file_count} | Time: {current_time}\033[0m")
                 logging.info(f"\033[96m📁 FILE: {os.path.basename(parquet_file)}\033[0m")
                 logging.info(f"\033[96m📂 PATH: {parquet_file}\033[0m")
                 logging.info("="*80 + "\n")
@@ -257,7 +258,8 @@ def base_train_model(
 
                 # ==================== TRAINING COMPLETION DIVIDER ====================
                 logging.info("\n" + "="*80)
-                logging.info(f"\033[92m✅ COMPLETED TRAINING ON FILE {file_idx+1}/{file_count}\033[0m")
+                current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+                logging.info(f"\033[92m✅ COMPLETED TRAINING ON FILE {file_idx+1}/{file_count} | Time: {current_time}\033[0m")
                 logging.info(f"\033[92m📁 FILE: {os.path.basename(parquet_file)}\033[0m")
                 logging.info(f"\033[92m🎯 BEST VALIDATION LOSS: {best_val_loss:.4f}\033[0m")
                 logging.info(f"\033[92m🔢 GLOBAL ITERATION: {global_iter}\033[0m")
