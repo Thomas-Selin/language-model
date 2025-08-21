@@ -8,7 +8,7 @@ import os
 import sys
 
 def stop_training():
-    stop_file_path = "data/output/STOP_TRAINING"
+    stop_file_path = "../data/output/STOP_TRAINING"
     
     # Create the data/output directory if it doesn't exist
     os.makedirs("data/output", exist_ok=True)
