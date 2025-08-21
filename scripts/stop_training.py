@@ -11,7 +11,7 @@ def stop_training():
     stop_file_path = "../data/output/STOP_TRAINING"
     
     # Create the data/output directory if it doesn't exist
-    os.makedirs("data/output", exist_ok=True)
+    os.makedirs("../data/output", exist_ok=True)
     
     # Create the stop file
     with open(stop_file_path, 'w') as f:

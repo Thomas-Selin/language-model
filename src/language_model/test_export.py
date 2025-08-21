@@ -4,7 +4,7 @@ import os
 import json
 import torch
 import datetime
-from ..export import export_model_as_safetensors
+from export import export_model_as_safetensors
 
 class TestExportModel(unittest.TestCase):
      @patch('os.makedirs')

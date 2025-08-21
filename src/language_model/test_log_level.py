@@ -5,7 +5,7 @@ Test script to demonstrate dynamic log level adjustment
 
 import sys
 import os
-sys.path.append('src/language_model')
+# sys.path.append('src/language_model')
 
 from helpers import configure_colored_logging, update_log_level
 import logging
