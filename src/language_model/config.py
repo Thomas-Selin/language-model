@@ -10,9 +10,9 @@ QA_PARQUET_PATH = 'data/input/chat-align/train-00000-of-00001.parquet'
 CONTEXT_PARQUET_PATH = 'data/input/context_data.parquet'
 
 # Model and training hyperparameters
-GLOBAL_ITER = 14345
+GLOBAL_ITER = 17545
 BATCH_SIZE = 96  # Reduced from 128 if OOM persists
-GRADIENT_ACCUMULATION_STEPS = 2  # Effective batch = 96*2 = 192
+GRADIENT_ACCUMULATION_STEPS = 8  # Effective batch = 96*8 = 768
 BLOCK_SIZE = 512
 BASE_TRAINING_MAX_EPOCHS = 100
 FINETUNING_MAX_EPOCHS = 4

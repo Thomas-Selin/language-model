@@ -3,8 +3,9 @@ import json
 import torch
 import shutil
 from safetensors.torch import save_model
-from gpt import GPTLanguageModel, block_size
+from gpt import GPTLanguageModel
 from datetime import datetime
+from config import BLOCK_SIZE
 
 def export_model_as_safetensors():
      # Create export directory structure with timestamp
@@ -20,7 +21,7 @@ def export_model_as_safetensors():
 
      # Load the trained model
      model = GPTLanguageModel(vocab_size=vocab_size)
-     model.load_state_dict(torch.load("data/output/chat_aligned_best_model.pt"))
+     model.load_state_dict(torch.load("data/output/tmp/best_model_resized_vocab_12856.pt", map_location=torch.device('cpu')))
      model.eval()
      
      # Extract model configuration from the model instance
@@ -43,7 +44,7 @@ def export_model_as_safetensors():
           "num_attention_heads": n_head,
           "intermediate_size": 4 * n_embd,  # Standard size for feedforward layer
           "hidden_act": "relu",  # You might want to extract this too if variable
-          "max_position_embeddings": block_size,
+          "max_position_embeddings": BLOCK_SIZE,
           "initializer_range": 0.02,
           "layer_norm_epsilon": 1e-5,
           "use_cache": True,
