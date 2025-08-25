@@ -1,4 +1,3 @@
-from safetensors import safe_open
 from gpt import GPTLanguageModel
 import torch
 import glob
@@ -7,18 +6,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 from subword_tokenizer import SubwordTokenizer
 
-# Find the latest model file based on timestamp in the filename
+# Find the latest chat aligned model (.pt file)
 def find_latest_model():
-    model_files = glob.glob(os.path.join('data', 'output', 'hf_model_*_*_*_*'))
+    # Look for chat_aligned_model.pt files in output directories
+    model_files = []
+    # Get the project root directory (two levels up from this file)
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    output_dirs = glob.glob(os.path.join(project_root, 'data', 'output', '*'))
+    
+    for output_dir in output_dirs:
+        if os.path.isdir(output_dir):
+            chat_model = os.path.join(output_dir, 'chat_aligned_model.pt')
+            if os.path.exists(chat_model):
+                model_files.append(chat_model)
     
     if not model_files:
-        raise FileNotFoundError("No model files found with timestamp pattern in data/output/")
+        raise FileNotFoundError("No chat_aligned_model.pt files found in data/output/")
     
-    # Sort files by timestamp
-    latest_file = max(model_files, key=lambda x: 
-        [int(n) for n in os.path.basename(x).replace('hf_model_', '').split('_')])
+    # Sort files by modification time (most recent first)
+    latest_file = max(model_files, key=os.path.getmtime)
     
-    print(f"Loading latest model: {latest_file}")
+    print(f"Loading latest chat aligned model: {latest_file}")
     return latest_file
 
 # Device selection - prioritize CUDA, then Metal, fall back to CPU
@@ -34,7 +42,9 @@ else:
 
 def load_tokenizer(tokenizer_type, model_dir):
     if tokenizer_type == 'subword':
-        vocab_path = os.path.join('data/output/', 'vocab_subword.json')
+        # Get the project root directory (two levels up from this file)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        vocab_path = os.path.join(project_root, 'data', 'output', 'vocab_subword.json')
         return SubwordTokenizer(vocab_file=vocab_path)
     else:
         raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
@@ -141,13 +151,13 @@ def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='s
                  model=None, tokenizer=None, device=None, enable_kv_cache=True):
     if model is None or tokenizer is None or device is None:
         latest_model = find_latest_model()
-        tokenizer = load_tokenizer(tokenizer_type, latest_model)
+        tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
         device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
         model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
         
-        with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
-            for k in f.keys():
-                model.state_dict()[k].copy_(f.get_tensor(k))
+        # Load the PyTorch model directly
+        checkpoint = torch.load(latest_model, map_location=device)
+        model.load_state_dict(checkpoint)
         
         model = model.to(device)
         # Apply quantization for energy efficiency

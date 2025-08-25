@@ -1,17 +1,20 @@
 import streamlit as st
-from serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel, safe_open
+from serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel
 import torch
+import os
 
 
 @st.cache_resource
 def load_model_and_tokenizer(tokenizer_type='subword'):
     latest_model = find_latest_model()
-    tokenizer = load_tokenizer(tokenizer_type, latest_model)
+    tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
-    with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
-        for k in f.keys():
-            model.state_dict()[k].copy_(f.get_tensor(k))
+    
+    # Load the PyTorch model directly
+    checkpoint = torch.load(latest_model, map_location=device)
+    model.load_state_dict(checkpoint)
+    
     model = model.to(device)
     
     # Apply energy-efficient optimizations
@@ -26,6 +29,13 @@ def load_model_and_tokenizer(tokenizer_type='subword'):
     return model, tokenizer, device
 
 st.title('Language Model Testground')
+
+# Show which model is being used
+try:
+    latest_model = find_latest_model()
+    st.info(f"🤖 Using model: `{os.path.basename(latest_model)}` from `{os.path.dirname(latest_model)}`")
+except Exception as e:
+    st.error(f"❌ Error finding model: {e}")
 
 user_input = st.text_area('Enter your prompt:', height=100)
 
