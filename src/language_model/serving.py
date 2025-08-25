@@ -39,6 +39,21 @@ def load_tokenizer(tokenizer_type, model_dir):
     else:
         raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
 
+# Add model quantization helper
+def quantize_model(model, device):
+    """Apply quantization for better energy efficiency"""
+    if device.type == 'cuda':
+        # Use half precision on GPU
+        return model.half()
+    elif device.type == 'cpu':
+        # Use dynamic quantization on CPU
+        return torch.quantization.quantize_dynamic(
+            model, {torch.nn.Linear}, dtype=torch.qint8
+        )
+    else:  # MPS
+        # MPS supports float16
+        return model.half()
+
 def visualize_attention(generated_text, all_attentions, tokenizer, step_idx=-1, layer_idx=0, head_idx=0):
     # Limit tokens for visualization
     max_tokens = 64
@@ -122,28 +137,56 @@ def visualize_combined_attention(generated_text, all_attentions, tokenizer, step
     fig.tight_layout()
     return fig
 
-def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='subword', model=None, tokenizer=None, device=None):
+def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='subword', 
+                 model=None, tokenizer=None, device=None, enable_kv_cache=True):
     if model is None or tokenizer is None or device is None:
         latest_model = find_latest_model()
         tokenizer = load_tokenizer(tokenizer_type, latest_model)
         device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
         model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
+        
         with safe_open(f'{latest_model}/model.safetensors', framework='pt') as f:
             for k in f.keys():
                 model.state_dict()[k].copy_(f.get_tensor(k))
+        
         model = model.to(device)
-        if device.type == 'cuda':
-            model = model.half()  # Use half-precision on GPU
+        # Apply quantization for energy efficiency
+        model = quantize_model(model, device)
         model.eval()
+        
+        # Enable torch optimizations
+        if hasattr(torch, 'compile') and device.type != 'mps':  # torch.compile not supported on MPS yet
+            model = torch.compile(model, mode='reduce-overhead')
+    
     eos_token_id = getattr(tokenizer, 'eos_token_id', None)
-    with torch.no_grad():
+    
+    # Set inference mode and disable gradient computation
+    with torch.inference_mode():
+        # Limit max tokens to prevent excessive computation
+        max_new_tokens = min(max_new_tokens, 500)
+        
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-        output, all_attentions = model.generate(
-            input_ids,
-            # max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            return_attention=True,
-            # eos_token_id=eos_token_id
-        )
+        
+        # Use autocast for mixed precision on supported devices
+        autocast_context = torch.autocast(device.type) if device.type in ['cuda', 'cpu'] else torch.no_grad()
+        
+        with autocast_context:
+            output, all_attentions = model.generate(
+                input_ids,
+                # max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                return_attention=True,
+                # eos_token_id=eos_token_id,
+                # use_cache=enable_kv_cache  # Enable KV caching if supported
+            )
+        
         generated = tokenizer.decode(output[0].tolist())
         return generated, all_attentions, tokenizer
+
+# Add memory cleanup function
+def cleanup_memory():
+    """Clean up GPU memory after inference"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()

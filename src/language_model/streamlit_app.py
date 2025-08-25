@@ -13,6 +13,15 @@ def load_model_and_tokenizer(tokenizer_type='subword'):
         for k in f.keys():
             model.state_dict()[k].copy_(f.get_tensor(k))
     model = model.to(device)
+    
+    # Apply energy-efficient optimizations
+    from serving import quantize_model
+    model = quantize_model(model, device)
+    
+    # Enable torch optimizations
+    if hasattr(torch, 'compile') and device.type != 'mps':
+        model = torch.compile(model, mode='reduce-overhead')
+    
     model.eval()
     return model, tokenizer, device
 
@@ -45,6 +54,11 @@ if st.button('Generate'):
                 prompt=user_input, max_new_tokens=200,
                 temperature=temperature, tokenizer_type='subword',
                 model=model, tokenizer=tokenizer, device=device)
+            
+            # Clean up memory after generation
+            from serving import cleanup_memory
+            cleanup_memory()
+        
         st.subheader('Generated Output:')
         st.write(result)
         if show_attention:
