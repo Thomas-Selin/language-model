@@ -6,7 +6,21 @@ import os
 
 @st.cache_resource
 def load_model_and_tokenizer(tokenizer_type='subword'):
+    """Load and cache the model and tokenizer. This will only run once per session."""
+    
+    # Check available memory before loading
+    if torch.cuda.is_available():
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        gpu_allocated = torch.cuda.memory_allocated(0) / 1024**3
+        gpu_free = gpu_memory - gpu_allocated
+        print(f"💾 GPU Memory: {gpu_free:.1f}GB free / {gpu_memory:.1f}GB total")
+        
+        if gpu_free < 2.0:  # Less than 2GB free
+            print("⚠️  Warning: Low GPU memory, applying aggressive optimizations")
+    
     latest_model = find_latest_model()
+    print(f"🔄 Loading model from: {latest_model}")
+    
     tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
@@ -26,14 +40,25 @@ def load_model_and_tokenizer(tokenizer_type='subword'):
         model = torch.compile(model, mode='reduce-overhead')
     
     model.eval()
-    return model, tokenizer, device
+    
+    # Clean up checkpoint from memory
+    del checkpoint
+    from serving import cleanup_memory
+    cleanup_memory()
+    
+    print("✅ Model loaded and optimized successfully")
+    return model, tokenizer, device, latest_model
 
 st.title('Language Model Testground')
 
-# Show which model is being used
+# Load model and tokenizer once at startup
+with st.spinner('🔄 Loading model (this happens only once per session)...'):
+    model, tokenizer, device, latest_model_path = load_model_and_tokenizer()
+    st.success('✅ Model loaded successfully!')
+
+# Show which model is being used (using cached path)
 try:
-    latest_model = find_latest_model()
-    st.info(f"🤖 Using model: `{os.path.basename(latest_model)}` from `{os.path.dirname(latest_model)}`")
+    st.info(f"🤖 Using model: `{os.path.basename(latest_model_path)}` from `{os.path.dirname(latest_model_path)}`")
 except Exception as e:
     st.error(f"❌ Error finding model: {e}")
 
@@ -59,7 +84,7 @@ show_attention = st.checkbox('Show attention visualizations', value=True)
 if st.button('Generate'):
     if user_input.strip():
         with st.spinner('Generating...'):
-            model, tokenizer, device = load_model_and_tokenizer()
+            # Use the pre-loaded model, tokenizer, and device
             result, all_attentions, tokenizer_obj = generate_text(
                 prompt=user_input, max_new_tokens=200,
                 temperature=temperature, tokenizer_type='subword',

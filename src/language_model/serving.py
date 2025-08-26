@@ -149,7 +149,9 @@ def visualize_combined_attention(generated_text, all_attentions, tokenizer, step
 
 def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='subword', 
                  model=None, tokenizer=None, device=None, enable_kv_cache=True):
+    # Only load model if not provided (for backward compatibility)
     if model is None or tokenizer is None or device is None:
+        print("⚠️  Loading model in generate_text - consider passing pre-loaded model for better performance")
         latest_model = find_latest_model()
         tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
         device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
@@ -167,12 +169,14 @@ def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='s
         # Enable torch optimizations
         if hasattr(torch, 'compile') and device.type != 'mps':  # torch.compile not supported on MPS yet
             model = torch.compile(model, mode='reduce-overhead')
+    else:
+        print("✅ Using pre-loaded model for generation")
     
     eos_token_id = getattr(tokenizer, 'eos_token_id', None)
     
     # Set inference mode and disable gradient computation
     with torch.inference_mode():
-        # Limit max tokens to prevent excessive computation
+        # Limit max tokens to prevent excessive computation and memory usage
         max_new_tokens = min(max_new_tokens, 500)
         
         input_ids = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
@@ -181,14 +185,26 @@ def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='s
         autocast_context = torch.autocast(device.type) if device.type in ['cuda', 'cpu'] else torch.no_grad()
         
         with autocast_context:
-            output, all_attentions = model.generate(
-                input_ids,
-                # max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                return_attention=True,
-                # eos_token_id=eos_token_id,
-                # use_cache=enable_kv_cache  # Enable KV caching if supported
-            )
+            try:
+                output, all_attentions = model.generate(
+                    input_ids,
+                    # max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    return_attention=True,
+                    # eos_token_id=eos_token_id,
+                    # use_cache=enable_kv_cache  # Enable KV caching if supported
+                )
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    cleanup_memory()
+                    print(f"❌ OOM Error during generation: {e}")
+                    raise RuntimeError("Out of memory during text generation. Try reducing max_new_tokens or using a smaller prompt.")
+                else:
+                    raise e
+        
+        # Clean up intermediate tensors
+        del input_ids
+        cleanup_memory()
         
         generated = tokenizer.decode(output[0].tolist())
         return generated, all_attentions, tokenizer
@@ -196,7 +212,16 @@ def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='s
 # Add memory cleanup function
 def cleanup_memory():
     """Clean up GPU memory after inference"""
+    import gc
+    
+    # Force garbage collection
+    gc.collect()
+    
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+        torch.mps.synchronize()
     elif torch.backends.mps.is_available():
         torch.mps.empty_cache()

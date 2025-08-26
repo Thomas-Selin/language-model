@@ -3,9 +3,9 @@ import json
 import torch
 import shutil
 from safetensors.torch import save_model
-from gpt import GPTLanguageModel
+from src.language_model.gpt import GPTLanguageModel
 from datetime import datetime
-from config import BLOCK_SIZE, TRAINING_START_TIME
+from src.language_model.config import BLOCK_SIZE, TRAINING_START_TIME
 
 CURRENT_MODEL_FOLDER = "20250810-095241"
 
