@@ -1,7 +1,7 @@
 import torch
 import logging
-from subword_tokenizer import SubwordTokenizer
-from model import GPTLanguageModel
+from src.language_model.subword_tokenizer import SubwordTokenizer
+from src.language_model.model import GPTLanguageModel
 import os
 
 
@@ -224,7 +224,7 @@ def resize_checkpoint_for_actual_vocab(
 if __name__ == "__main__":
     # Example usage
     import sys
-    from config import VOCAB_PATH, TRAINING_START_TIME
+    from src.language_model.config import VOCAB_PATH, TRAINING_START_TIME
     
     if len(sys.argv) < 2:
         print("Usage: python checkpoint_resizer.py <checkpoint_path> [output_path]")

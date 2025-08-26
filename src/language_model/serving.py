@@ -7,8 +7,7 @@ import numpy as np
 from subword_tokenizer import SubwordTokenizer
 
 # Find the latest chat aligned model (.pt file)
-def find_latest_model():
-    # Look for chat_aligned_model.pt files in output directories
+def find_latest_model(model_type="chat"):
     model_files = []
     # Get the project root directory (two levels up from this file)
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,17 +15,23 @@ def find_latest_model():
     
     for output_dir in output_dirs:
         if os.path.isdir(output_dir):
-            chat_model = os.path.join(output_dir, 'chat_aligned_model.pt')
-            if os.path.exists(chat_model):
-                model_files.append(chat_model)
+            if model_type == "chat":
+                model_file = os.path.join(output_dir, 'chat_aligned_model.pt')
+            else:  # pre-trained
+                model_file = os.path.join(output_dir, 'best_model_resized_vocab_12856.pt')
+            
+            if os.path.exists(model_file):
+                model_files.append(model_file)
     
     if not model_files:
-        raise FileNotFoundError("No chat_aligned_model.pt files found in data/output/")
+        model_name = "chat_aligned_model.pt" if model_type == "chat" else "model.pt"
+        raise FileNotFoundError(f"No {model_name} files found in data/output/")
     
     # Sort files by modification time (most recent first)
     latest_file = max(model_files, key=os.path.getmtime)
     
-    print(f"Loading latest chat aligned model: {latest_file}")
+    model_description = "chat aligned" if model_type == "chat" else "pre-trained"
+    print(f"Loading latest {model_description} model: {latest_file}")
     return latest_file
 
 # Device selection - prioritize CUDA, then Metal, fall back to CPU
@@ -147,7 +152,7 @@ def visualize_combined_attention(generated_text, all_attentions, tokenizer, step
     fig.tight_layout()
     return fig
 
-def generate_text(prompt, max_new_tokens=200, temperature=0.8, tokenizer_type='subword', 
+def generate_text(prompt, max_new_tokens=50, temperature=0.8, tokenizer_type='subword', 
                  model=None, tokenizer=None, device=None, enable_kv_cache=True):
     # Only load model if not provided (for backward compatibility)
     if model is None or tokenizer is None or device is None:

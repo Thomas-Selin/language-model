@@ -2,13 +2,24 @@ import streamlit as st
 from serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel
 import torch
 import os
+import gc
+import psutil
 
 
 @st.cache_resource
-def load_model_and_tokenizer(tokenizer_type='subword'):
+def load_model_and_tokenizer(tokenizer_type='subword', model_type='chat'):
     """Load and cache the model and tokenizer. This will only run once per session."""
     
-    # Check available memory before loading
+    # Check system memory
+    memory_info = psutil.virtual_memory()
+    available_gb = memory_info.available / (1024**3)
+    total_gb = memory_info.total / (1024**3)
+    print(f"💾 System Memory: {available_gb:.1f}GB free / {total_gb:.1f}GB total")
+    
+    if available_gb < 4.0:  # Less than 4GB free
+        st.warning(f"⚠️ Low system memory ({available_gb:.1f}GB free). Consider closing other applications.")
+    
+    # Check GPU memory if available
     if torch.cuda.is_available():
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
         gpu_allocated = torch.cuda.memory_allocated(0) / 1024**3
@@ -18,7 +29,7 @@ def load_model_and_tokenizer(tokenizer_type='subword'):
         if gpu_free < 2.0:  # Less than 2GB free
             print("⚠️  Warning: Low GPU memory, applying aggressive optimizations")
     
-    latest_model = find_latest_model()
+    latest_model = find_latest_model(model_type)
     print(f"🔄 Loading model from: {latest_model}")
     
     tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
@@ -35,8 +46,8 @@ def load_model_and_tokenizer(tokenizer_type='subword'):
     from serving import quantize_model
     model = quantize_model(model, device)
     
-    # Enable torch optimizations
-    if hasattr(torch, 'compile') and device.type != 'mps':
+    # Enable torch optimizations (disabled for MPS to prevent issues)
+    if hasattr(torch, 'compile') and device.type == 'cuda':  # Only on CUDA
         model = torch.compile(model, mode='reduce-overhead')
     
     model.eval()
@@ -49,111 +60,167 @@ def load_model_and_tokenizer(tokenizer_type='subword'):
     print("✅ Model loaded and optimized successfully")
     return model, tokenizer, device, latest_model
 
+def aggressive_cleanup():
+    """Aggressive memory cleanup to prevent OOM"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+        try:
+            torch.mps.synchronize()
+        except:
+            pass  # synchronize might not be available in all MPS versions
+
+def check_memory_usage():
+    """Check current memory usage and warn if high"""
+    memory_info = psutil.virtual_memory()
+    used_percent = memory_info.percent
+    available_gb = memory_info.available / (1024**3)
+    
+    if used_percent > 85:
+        st.warning(f"⚠️ High memory usage ({used_percent:.1f}% used, {available_gb:.1f}GB free)")
+        return False
+    return True
+
 st.title('Language Model Testground')
 
+# Model selection
+st.subheader('Model Selection')
+model_type = st.radio(
+    "Choose model type:",
+    options=['chat', 'pretrained'],
+    format_func=lambda x: '💬 Chat Fine-tuned Model (short single-turn questions in English)' if x == 'chat' else '🧠 Pre-trained Model',
+    index=0,  # Default to chat model
+    help="Chat model is fine-tuned for conversations, pre-trained model is the base model"
+)
+
 # Load model and tokenizer once at startup
-with st.spinner('🔄 Loading model (this happens only once per session)...'):
-    model, tokenizer, device, latest_model_path = load_model_and_tokenizer()
+with st.spinner(f'🔄 Loading {model_type} model (this happens only once per session)...'):
+    model, tokenizer, device, latest_model_path = load_model_and_tokenizer(model_type=model_type)
     st.success('✅ Model loaded successfully!')
 
 # Show which model is being used (using cached path)
 try:
-    st.info(f"🤖 Using model: `{os.path.basename(latest_model_path)}` from `{os.path.dirname(latest_model_path)}`")
+    st.info(f"🤖 Using model: `{latest_model_path}` from `{os.path.dirname(latest_model_path)}`")
+    st.info(f"🔤 Tokenizer type: subword")
 except Exception as e:
     st.error(f"❌ Error finding model: {e}")
 
+# Option to show memory status
+show_memory_status = st.checkbox('Show memory status', value=False)
+
+if show_memory_status:
+    # Memory status
+    memory_info = psutil.virtual_memory()
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Memory Usage", f"{memory_info.percent:.1f}%")
+    with col2:
+        st.metric("Available Memory", f"{memory_info.available / (1024**3):.1f}GB")
+    with col3:
+        # GPU memory status
+        if torch.cuda.is_available():
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            gpu_allocated = torch.cuda.memory_allocated(0) / 1024**3
+            gpu_free = gpu_memory - gpu_allocated
+            st.metric("GPU Memory", f"{gpu_allocated:.1f}GB / {gpu_memory:.1f}GB")
+        elif torch.backends.mps.is_available():
+            st.metric("GPU Memory", "Mac GPU")
+        else:
+            st.metric("GPU Memory", "Not available")
+
 user_input = st.text_area('Enter your prompt:', height=100)
 
-# Tokenizer selection
-# st.subheader('Tokenizer Settings')
-# tokenizer_type = st.selectbox(
-#     'Tokenizer',
-#     options=['subword'],
-#     format_func=lambda x: {'subword': 'Subword'}[x]
-# )
-
-
-# max_tokens = st.slider('Max new tokens', 1, 1000, 5)
+# Limit max tokens to prevent OOM
+max_tokens = st.slider('Max new tokens', 1, 100, 50, help="Lower values reduce memory usage")
 temperature = st.slider('Temperature', 0.01, 1.0, 0.8, 0.05)
 
-# Option to show attention visualizations
-show_attention = st.checkbox('Show attention visualizations', value=True)
+# Option to show attention visualizations (with warning)
+show_attention = st.checkbox('Show attention visualizations (⚠️ Uses more memory)', value=False)
 
-
+if show_attention:
+    st.warning("⚠️ Attention visualizations use significant memory. Disable if experiencing crashes.")
 
 if st.button('Generate'):
     if user_input.strip():
+        # Check memory before generation
+        if not check_memory_usage():
+            st.error("❌ Cannot generate: Low memory. Try restarting the app or closing other applications.")
+            st.stop()
+        
+        # Clean up before generation
+        aggressive_cleanup()
+        
         with st.spinner('Generating...'):
-            # Use the pre-loaded model, tokenizer, and device
-            result, all_attentions, tokenizer_obj = generate_text(
-                prompt=user_input, max_new_tokens=200,
-                temperature=temperature, tokenizer_type='subword',
-                model=model, tokenizer=tokenizer, device=device)
-            
-            # Clean up memory after generation
-            from serving import cleanup_memory
-            cleanup_memory()
+            try:
+                # Use the pre-loaded model, tokenizer, and device with limited tokens
+                result, all_attentions, tokenizer_obj = generate_text(
+                    prompt=user_input, max_new_tokens=max_tokens,
+                    temperature=temperature, tokenizer_type='subword',
+                    model=model, tokenizer=tokenizer, device=device)
+                
+                # Clean up immediately after generation
+                aggressive_cleanup()
+                
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    aggressive_cleanup()
+                    st.error("❌ Out of memory! Try:")
+                    st.write("- Reducing max tokens")
+                    st.write("- Disabling attention visualizations")
+                    st.write("- Restarting the app")
+                    st.stop()
+                else:
+                    raise e
         
         st.subheader('Generated Output:')
         st.write(result)
-        if show_attention:
-            from serving import visualize_combined_attention, visualize_attention
-            st.subheader('Attention Visualizations')
-            mean_fig = visualize_combined_attention(result, all_attentions, tokenizer_obj, aggregation='mean')
-            max_fig = visualize_combined_attention(result, all_attentions, tokenizer_obj, aggregation='max')
-            layer_figs = []
-            for layer_idx in range(2):  # Assuming 2 layers
-                fig = visualize_attention(result, all_attentions, tokenizer_obj, layer_idx=layer_idx)
-                layer_figs.append(fig)
-            tabs = st.tabs(["Combined (Mean)", "Combined (Max)", "Layer-specific", " ❓"])
-            with tabs[0]:
-                st.markdown("""
-                ### Combined Mean Attention
-                This visualization shows the average attention patterns across all layers and heads.
-                Brighter colors indicate stronger average attention between tokens.
-                This is useful for understanding what the model is generally focusing on when generating text.
-                """)
-                st.pyplot(mean_fig)
-            with tabs[1]:
-                st.markdown("""
-                ### Combined Max Attention
-                This visualization shows the maximum attention weight between any tokens across all layers and heads.
-                It reveals the strongest connections, even if they only appear in a single head.
-                Look for bright spots that might indicate important token relationships.
-                """)
-                st.pyplot(max_fig)
-            with tabs[2]:
-                st.markdown("""
-                ### Layer-specific Attention
-                These visualizations show attention patterns in individual layers.
-                Different layers may focus on different linguistic aspects:
-                - Earlier layers often capture more local patterns 
-                - Later layers may focus on higher-level relationships
-                """)
-                for i, fig in enumerate(layer_figs):
-                    st.markdown(f"#### Layer {i}, Head 0")
-                    st.pyplot(fig)
-            with tabs[3]:
-                st.markdown("""
-                ### Interpreting These Attention Plots:
-                - **Y-axis ("From token")**: The token that is paying attention
-                - **X-axis ("Attended to")**: The token receiving attention
-                - **Color**: Brighter colors = stronger attention
-                - **Numbers**: Actual attention weight values
-                ### Key Patterns:
-                - **Diagonal line**: Self-attention (tokens attending to themselves)
-                - **Lower triangle**: Each token attending to previous tokens
-                - **Dark upper triangle**: No attention to future tokens (causal mask)
-                ### When to Use Each View:
-                **Mean Attention**: 
-                - For understanding typical behavior
-                - For consistent patterns across heads
-                - For general explanation of model behavior
-                **Max Attention**:
-                - For finding specialized attention heads
-                - For investigating strongest influences
-                - For identifying unique token relationships
-                """    )
-        # else: do not show attention visualizations
+        
+        if show_attention and all_attentions:
+            # Check memory before visualizations
+            memory_info = psutil.virtual_memory()
+            if memory_info.percent > 80:
+                st.warning("⚠️ Skipping attention visualizations due to high memory usage")
+            else:
+                try:
+                    from serving import visualize_combined_attention, visualize_attention
+                    st.subheader('Attention Visualizations')
+                    
+                    # Generate only essential visualizations to save memory
+                    mean_fig = visualize_combined_attention(result, all_attentions, tokenizer_obj, aggregation='mean')
+                    st.pyplot(mean_fig)
+                    
+                    # Clean up after each visualization
+                    del mean_fig
+                    aggressive_cleanup()
+                    
+                    # Only show layer-specific if memory allows
+                    memory_check = psutil.virtual_memory()
+                    if memory_check.percent < 75:
+                        layer_fig = visualize_attention(result, all_attentions, tokenizer_obj, layer_idx=0)
+                        st.pyplot(layer_fig)
+                        del layer_fig
+                        aggressive_cleanup()
+                    else:
+                        st.info("Skipped layer-specific visualization to conserve memory")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error generating visualizations: {e}")
+                    aggressive_cleanup()
+        
+        # Final cleanup
+        aggressive_cleanup()
+        
+        # Show memory status after generation
+        memory_info = psutil.virtual_memory()
+        st.info(f"Memory after generation: {memory_info.percent:.1f}% used")
+        
     else:
         st.warning('Please enter a prompt.')
+
+# Add a cleanup button for manual memory management
+if st.button('🧹 Clean Memory'):
+    aggressive_cleanup()
+    st.success('Memory cleaned!')
