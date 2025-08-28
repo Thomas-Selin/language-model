@@ -2,7 +2,7 @@
 start_time=$(date +%Y-%m-%d_%H-%M)
 logfile="data/output/logs/full_log_$start_time.txt"
 
-# # Instead, continue using earlier log file
+# # Instead, if you want to continue using earlier log file
 # logfile="data/output/logs/full_log_2025-08-10_09-52.txt"
 
 runtime_start=$(date +%s)
