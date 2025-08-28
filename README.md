@@ -23,6 +23,10 @@ Pre-training and base training were performed using three datasets, and fine-tun
 3. Install dependencies: `uv sync`
 4. Run the `run_all.sh` file to both create, train, export and serve/inference the model via a web app.
 
+### Monitoring the training process
+
+Run `tensorboard --logdir=.` in the `data/output/<your training session timestamp>/tensorboard_logs` to serve a UI for monitoring training
+
 ### Adjusting training parameters during training process
 
 In the file `RUNTIME_OVERRIDES.json` you can override the intial parameters specified in `config.py` during training.
