@@ -320,43 +320,56 @@ def visualize_word_to_word_attention(generated_text, all_attentions, tokenizer, 
     # Aggregate tokens into words
     words, word_attention = aggregate_tokens_to_words(tokens, head_attention)
     
-    # Create heatmap
+    # Apply power transformation to increase contrast for small differences
+    word_attention_enhanced = np.power(word_attention, 0.7)  # Enhance contrast
+    
+    # Apply row-wise normalization to make patterns clearer
+    row_sums = word_attention_enhanced.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # Avoid division by zero
+    word_attention_normalized = word_attention_enhanced / row_sums
+    
+    # Create heatmap with better contrast
     fig, ax = plt.subplots(figsize=(12, 10))
-    im = ax.imshow(word_attention, cmap='viridis', aspect='auto')
+    
+    # Use a more contrasting colormap and add gridlines
+    im = ax.imshow(word_attention_normalized, cmap='RdYlBu_r', aspect='auto', vmin=0, vmax=1)
+    
+    # Add grid for better separation
+    ax.set_xticks(np.arange(len(words)) + 0.5, minor=True)
+    ax.set_yticks(np.arange(len(words)) + 0.5, minor=True)
+    ax.grid(which='minor', color='white', linestyle='-', linewidth=1, alpha=0.7)
+    
     cbar = ax.figure.colorbar(im, ax=ax)
-    cbar.ax.set_ylabel("Attention weight", rotation=-90, va="bottom")
+    cbar.ax.set_ylabel("Normalized attention weight", rotation=-90, va="bottom")
     
     ax.set_xticks(np.arange(len(words)))
     ax.set_yticks(np.arange(len(words)))
-    ax.set_xticklabels(words, rotation=45, ha="right")
-    ax.set_yticklabels(words)
+    ax.set_xticklabels(words, rotation=45, ha="right", fontsize=10)
+    ax.set_yticklabels(words, fontsize=10)
     
-    ax.set_title(f"Word-to-Word Attention - Layer {layer_idx}, Head {head_idx}\n(Shows which words attend to which other words)")
-    ax.set_xlabel("Attended to (what is being focused on)")
-    ax.set_ylabel("From word (what is doing the attending)")
+    ax.set_title(f"Word-to-Word Attention - Layer {layer_idx}, Head {head_idx}\n(Normalized per row for better contrast)", fontsize=12)
+    ax.set_xlabel("Attended to (what is being focused on)", fontsize=11)
+    ax.set_ylabel("From word (what is doing the attending)", fontsize=11)
     
-    # Add attention values as text
-    threshold = np.max(word_attention) * 0.15  # Show values above 15% of max
-    for i in range(word_attention.shape[0]):
-        for j in range(word_attention.shape[1]):
-            if word_attention[i, j] > threshold:
-                text = ax.text(j, i, f"{word_attention[i, j]:.2f}",
-                              ha="center", va="center", 
-                              color="white" if word_attention[i, j] > threshold*2 else "black",
-                              fontsize=8)
-    
-    # Add explanation
-    ax.text(0.02, 0.98, "💡 Bright cells show strong attention\n   e.g., 'it' → 'bear' (high value)\n   vs. 'it' → 'cake' (low value)", 
-            transform=ax.transAxes, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
-            fontsize=9)
+    # Add attention values as text with black color
+    threshold = 0.1  # Show values above 10% of normalized range
+    for i in range(word_attention_normalized.shape[0]):
+        for j in range(word_attention_normalized.shape[1]):
+            value = word_attention_normalized[i, j]
+            original_value = word_attention[i, j]
+            if value > threshold:
+                # Use black text for all values
+                ax.text(j, i, f"{original_value:.3f}",
+                       ha="center", va="center", 
+                       color="black",
+                       fontsize=8, weight='bold')
     
     plt.tight_layout()
     return fig
 
 def visualize_combined_word_attention(generated_text, all_attentions, tokenizer, step_idx=-1, aggregation='mean'):
     """
-    Combined word-to-word attention across all layers and heads.
+    Combined word-to-word attention across all layers and heads with enhanced contrast.
     """
     all_tokens = tokenizer.encode(generated_text)
     max_tokens = min(len(all_tokens), 32)
@@ -386,7 +399,7 @@ def visualize_combined_word_attention(generated_text, all_attentions, tokenizer,
     if not all_matrices:
         return None
         
-    # Ensure all matrices have the same size (use the most common size)
+    # Ensure all matrices have the same size
     sizes = [m.shape[0] for m in all_matrices]
     most_common_size = max(set(sizes), key=sizes.count)
     filtered_matrices = [m for m in all_matrices if m.shape[0] == most_common_size]
@@ -403,35 +416,60 @@ def visualize_combined_word_attention(generated_text, all_attentions, tokenizer,
     else:
         raise ValueError(f"Unknown aggregation method: {aggregation}")
     
-    # Get words for the most common size (reconstruct from tokens)
+    # Get words for the display
     sample_matrix = filtered_matrices[0]
     tokens_for_size = tokens[:sample_matrix.shape[0]]
     words, _ = aggregate_tokens_to_words(tokens_for_size, sample_matrix)
     
-    # Create heatmap
+    # Apply logarithmic scaling to enhance small differences
+    combined_attention_log = np.log1p(combined_attention * 100)  # log(1 + 100*x) for better scaling
+    
+    # Row-wise normalization for better patterns
+    row_sums = combined_attention_log.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1
+    combined_attention_normalized = combined_attention_log / row_sums
+    
+    # Create enhanced heatmap
     fig, ax = plt.subplots(figsize=(14, 12))
-    im = ax.imshow(combined_attention, cmap='plasma', aspect='auto')
+    
+    # Use diverging colormap with better contrast
+    im = ax.imshow(combined_attention_normalized, cmap='RdBu_r', aspect='auto')
+    
+    # Add grid lines
+    ax.set_xticks(np.arange(len(words)) + 0.5, minor=True)
+    ax.set_yticks(np.arange(len(words)) + 0.5, minor=True)
+    ax.grid(which='minor', color='white', linestyle='-', linewidth=1.5, alpha=0.8)
+    
     cbar = ax.figure.colorbar(im, ax=ax)
-    cbar.ax.set_ylabel(f"{aggregation.capitalize()} attention weight", rotation=-90, va="bottom")
+    cbar.ax.set_ylabel(f"Log-normalized {aggregation} attention", rotation=-90, va="bottom")
     
     ax.set_xticks(np.arange(len(words)))
     ax.set_yticks(np.arange(len(words)))
-    ax.set_xticklabels(words, rotation=45, ha="right")
-    ax.set_yticklabels(words)
+    ax.set_xticklabels(words, rotation=45, ha="right", fontsize=10)
+    ax.set_yticklabels(words, fontsize=10)
     
-    ax.set_title(f"Combined Word-to-Word Attention ({aggregation})\n(Overall patterns of which words refer to which)")
-    ax.set_xlabel("Attended to (what is being focused on)")
-    ax.set_ylabel("From word (what is doing the attending)")
+    ax.set_title(f"Combined Word Attention ({aggregation}) - Enhanced Contrast\n(Log-scaled and normalized for better visibility)", fontsize=12)
+    ax.set_xlabel("Attended to (what is being focused on)", fontsize=11)
+    ax.set_ylabel("From word (what is doing the attending)", fontsize=11)
     
-    # Add attention values
-    threshold = np.max(combined_attention) * 0.1
-    for i in range(combined_attention.shape[0]):
-        for j in range(combined_attention.shape[1]):
-            if combined_attention[i, j] > threshold:
-                text = ax.text(j, i, f"{combined_attention[i, j]:.2f}",
-                              ha="center", va="center", 
-                              color="white" if combined_attention[i, j] > threshold*2 else "black",
-                              fontsize=8)
+    # Add values with better contrast logic
+    threshold = np.percentile(combined_attention_normalized, 75)  # Top 25% of values
+    for i in range(combined_attention_normalized.shape[0]):
+        for j in range(combined_attention_normalized.shape[1]):
+            norm_value = combined_attention_normalized[i, j]
+            orig_value = combined_attention[i, j]
+            if norm_value > threshold and orig_value > 0.01:  # Only show significant values
+                text_color = "white" if norm_value > np.mean(combined_attention_normalized) else "black"
+                ax.text(j, i, f"{orig_value:.3f}",
+                       ha="center", va="center", 
+                       color=text_color,
+                       fontsize=7, weight='bold')
+    
+    # Add informative text box
+    ax.text(0.02, 0.98, "💡 Enhanced contrast mode\n   • Log-scaled values\n   • Row normalized\n   • Grid lines for clarity\n   • Top 25% values shown", 
+            transform=ax.transAxes, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.9),
+            fontsize=9)
     
     plt.tight_layout()
     return fig
