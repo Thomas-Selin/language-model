@@ -69,6 +69,373 @@ def quantize_model(model, device):
         # MPS supports float16
         return model.half()
 
+def aggregate_tokens_to_words(tokens, attention_matrix):
+    """
+    Aggregate subword tokens into words and combine their attention weights.
+    Returns word-level tokens and aggregated attention matrix.
+    """
+    import re
+    
+    # Group tokens into words (tokens starting with special chars like Ġ or ## are continuations)
+    words = []
+    word_indices = []  # Maps word index to list of token indices
+    current_word = ""
+    current_indices = []
+    
+    for i, token in enumerate(tokens):
+        # Clean token for display (remove BPE markers)
+        clean_token = token.replace('Ġ', ' ').replace('##', '').strip()
+        
+        # If token starts with space or is the first token, start new word
+        if token.startswith('Ġ') or token.startswith(' ') or i == 0:
+            if current_word:  # Save previous word
+                words.append(current_word.strip())
+                word_indices.append(current_indices)
+            current_word = clean_token
+            current_indices = [i]
+        else:
+            # Continue current word
+            current_word += clean_token
+            current_indices.append(i)
+    
+    # Don't forget the last word
+    if current_word:
+        words.append(current_word.strip())
+        word_indices.append(current_indices)
+    
+    # Aggregate attention weights by summing over subword tokens within each word
+    word_attention = np.zeros((len(words), len(words)))
+    
+    for i, from_indices in enumerate(word_indices):
+        for j, to_indices in enumerate(word_indices):
+            # Sum attention from all tokens in word i to all tokens in word j
+            attention_sum = 0
+            for from_idx in from_indices:
+                for to_idx in to_indices:
+                    if from_idx < attention_matrix.shape[0] and to_idx < attention_matrix.shape[1]:
+                        attention_sum += attention_matrix[from_idx, to_idx]
+            # Average by number of token pairs to normalize
+            word_attention[i, j] = attention_sum / (len(from_indices) * len(to_indices))
+    
+    return words, word_attention
+
+def visualize_input_attention(prompt, generated_text, all_attentions, tokenizer, step_idx=-1, layer_idx=0, head_idx=0):
+    """
+    Visualize attention only for the input prompt, aggregated by words.
+    Shows what parts of the input the model focused on during generation.
+    """
+    # Get input tokens
+    input_tokens = tokenizer.encode(prompt)
+    input_length = len(input_tokens)
+    
+    if input_length == 0:
+        return None
+    
+    # Get attention for the last generation step
+    step_attention = all_attentions[step_idx]
+    layer_attention = step_attention[layer_idx]
+    attention_tensor = layer_attention[head_idx]
+    
+    if len(attention_tensor.shape) == 3 and attention_tensor.shape[0] == 1:
+        head_attention = attention_tensor.squeeze(0).cpu().numpy()
+    else:
+        head_attention = attention_tensor.cpu().numpy()
+    
+    # Only look at attention TO the input tokens (columns)
+    # and FROM the last generated token (last row)
+    if head_attention.shape[0] > input_length:
+        input_attention = head_attention[-1, :input_length]  # Last token's attention to input
+    else:
+        input_attention = head_attention[:input_length, :input_length]
+        input_attention = np.mean(input_attention, axis=0)  # Average attention to each input token
+    
+    # Convert tokens to words and aggregate attention
+    input_token_strings = [tokenizer.decode([t]) for t in input_tokens]
+    
+    # Simple word aggregation for input attention (1D)
+    words = []
+    word_attentions = []
+    current_word = ""
+    current_attention = 0
+    token_count = 0
+    
+    for i, token in enumerate(input_token_strings):
+        clean_token = token.replace('Ġ', ' ').replace('##', '').strip()
+        
+        if token.startswith('Ġ') or token.startswith(' ') or i == 0:
+            if current_word and token_count > 0:  # Save previous word
+                words.append(current_word.strip())
+                word_attentions.append(current_attention / token_count)
+            current_word = clean_token
+            current_attention = input_attention[i] if i < len(input_attention) else 0
+            token_count = 1
+        else:
+            current_word += clean_token
+            current_attention += input_attention[i] if i < len(input_attention) else 0
+            token_count += 1
+    
+    # Don't forget the last word
+    if current_word and token_count > 0:
+        words.append(current_word.strip())
+        word_attentions.append(current_attention / token_count)
+    
+    # Create bar plot
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(range(len(words)), word_attentions, color='viridis')
+    
+    # Color bars by attention strength
+    max_attention = max(word_attentions) if word_attentions else 1
+    for i, (bar, attention) in enumerate(zip(bars, word_attentions)):
+        bar.set_color(plt.cm.viridis(attention / max_attention))
+    
+    ax.set_xlabel('Input Words')
+    ax.set_ylabel('Attention Weight')
+    ax.set_title(f'Input Attention - Layer {layer_idx}, Head {head_idx}\n(What the model focused on in your prompt)')
+    ax.set_xticks(range(len(words)))
+    ax.set_xticklabels(words, rotation=45, ha='right')
+    
+    # Add value labels on bars
+    for i, (word, attention) in enumerate(zip(words, word_attentions)):
+        ax.text(i, attention + max_attention * 0.01, f'{attention:.3f}', 
+                ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    return fig
+
+def visualize_combined_input_attention(prompt, generated_text, all_attentions, tokenizer, step_idx=-1, aggregation='mean'):
+    """
+    Visualize combined attention to input across all layers and heads, aggregated by words.
+    """
+    input_tokens = tokenizer.encode(prompt)
+    input_length = len(input_tokens)
+    
+    if input_length == 0:
+        return None
+    
+    step_attention = all_attentions[step_idx]
+    all_input_attentions = []
+    
+    # Collect attention to input from all layers and heads
+    for layer_idx in range(len(step_attention)):
+        for head_idx in range(len(step_attention[layer_idx])):
+            attention_tensor = step_attention[layer_idx][head_idx]
+            if len(attention_tensor.shape) == 3 and attention_tensor.shape[0] == 1:
+                attention_matrix = attention_tensor.squeeze(0).cpu().numpy()
+            else:
+                attention_matrix = attention_tensor.cpu().numpy()
+            
+            # Get attention to input tokens from the last generated token
+            if attention_matrix.shape[0] > input_length:
+                input_attention = attention_matrix[-1, :input_length]
+            else:
+                input_attention = attention_matrix[:input_length, :input_length]
+                input_attention = np.mean(input_attention, axis=0)
+            
+            all_input_attentions.append(input_attention[:input_length])
+    
+    # Aggregate across all heads and layers
+    if aggregation == 'mean':
+        combined_input_attention = np.mean(all_input_attentions, axis=0)
+    elif aggregation == 'max':
+        combined_input_attention = np.max(all_input_attentions, axis=0)
+    elif aggregation == 'sum':
+        combined_input_attention = np.sum(all_input_attentions, axis=0)
+    else:
+        raise ValueError(f"Unknown aggregation method: {aggregation}")
+    
+    # Convert to words and aggregate
+    input_token_strings = [tokenizer.decode([t]) for t in input_tokens]
+    words = []
+    word_attentions = []
+    current_word = ""
+    current_attention = 0
+    token_count = 0
+    
+    for i, token in enumerate(input_token_strings):
+        clean_token = token.replace('Ġ', ' ').replace('##', '').strip()
+        
+        if token.startswith('Ġ') or token.startswith(' ') or i == 0:
+            if current_word and token_count > 0:
+                words.append(current_word.strip())
+                word_attentions.append(current_attention / token_count)
+            current_word = clean_token
+            current_attention = combined_input_attention[i] if i < len(combined_input_attention) else 0
+            token_count = 1
+        else:
+            current_word += clean_token
+            current_attention += combined_input_attention[i] if i < len(combined_input_attention) else 0
+            token_count += 1
+    
+    if current_word and token_count > 0:
+        words.append(current_word.strip())
+        word_attentions.append(current_attention / token_count)
+    
+    # Create bar plot
+    fig, ax = plt.subplots(figsize=(14, 7))
+    bars = ax.bar(range(len(words)), word_attentions)
+    
+    # Color bars by attention strength
+    max_attention = max(word_attentions) if word_attentions else 1
+    for i, (bar, attention) in enumerate(zip(bars, word_attentions)):
+        bar.set_color(plt.cm.plasma(attention / max_attention))
+    
+    ax.set_xlabel('Input Words')
+    ax.set_ylabel(f'{aggregation.capitalize()} Attention Weight')
+    ax.set_title(f'Combined Input Attention ({aggregation})\n(Overall focus on each word in your prompt)')
+    ax.set_xticks(range(len(words)))
+    ax.set_xticklabels(words, rotation=45, ha='right')
+    
+    # Add value labels on bars
+    for i, (word, attention) in enumerate(zip(words, word_attentions)):
+        ax.text(i, attention + max_attention * 0.01, f'{attention:.3f}', 
+                ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    return fig
+
+def visualize_word_to_word_attention(generated_text, all_attentions, tokenizer, step_idx=-1, layer_idx=0, head_idx=0):
+    """
+    Visualize word-to-word attention to show relationships like 'it' -> 'bear'.
+    Aggregates subword tokens into words and shows attention between words.
+    """
+    # Get all tokens for the generated text
+    all_tokens = tokenizer.encode(generated_text)
+    max_tokens = min(len(all_tokens), 32)  # Limit for readability
+    tokens = [tokenizer.decode([t]) for t in all_tokens[:max_tokens]]
+    
+    # Get attention matrix
+    step_attention = all_attentions[step_idx]
+    layer_attention = step_attention[layer_idx]
+    attention_tensor = layer_attention[head_idx]
+    
+    if len(attention_tensor.shape) == 3 and attention_tensor.shape[0] == 1:
+        head_attention = attention_tensor.squeeze(0).cpu().numpy()
+    else:
+        head_attention = attention_tensor.cpu().numpy()
+    
+    attention_size = min(head_attention.shape[0], len(tokens))
+    tokens = tokens[:attention_size]
+    head_attention = head_attention[:attention_size, :attention_size]
+    
+    # Aggregate tokens into words
+    words, word_attention = aggregate_tokens_to_words(tokens, head_attention)
+    
+    # Create heatmap
+    fig, ax = plt.subplots(figsize=(12, 10))
+    im = ax.imshow(word_attention, cmap='viridis', aspect='auto')
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel("Attention weight", rotation=-90, va="bottom")
+    
+    ax.set_xticks(np.arange(len(words)))
+    ax.set_yticks(np.arange(len(words)))
+    ax.set_xticklabels(words, rotation=45, ha="right")
+    ax.set_yticklabels(words)
+    
+    ax.set_title(f"Word-to-Word Attention - Layer {layer_idx}, Head {head_idx}\n(Shows which words attend to which other words)")
+    ax.set_xlabel("Attended to (what is being focused on)")
+    ax.set_ylabel("From word (what is doing the attending)")
+    
+    # Add attention values as text
+    threshold = np.max(word_attention) * 0.15  # Show values above 15% of max
+    for i in range(word_attention.shape[0]):
+        for j in range(word_attention.shape[1]):
+            if word_attention[i, j] > threshold:
+                text = ax.text(j, i, f"{word_attention[i, j]:.2f}",
+                              ha="center", va="center", 
+                              color="white" if word_attention[i, j] > threshold*2 else "black",
+                              fontsize=8)
+    
+    # Add explanation
+    ax.text(0.02, 0.98, "💡 Bright cells show strong attention\n   e.g., 'it' → 'bear' (high value)\n   vs. 'it' → 'cake' (low value)", 
+            transform=ax.transAxes, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+            fontsize=9)
+    
+    plt.tight_layout()
+    return fig
+
+def visualize_combined_word_attention(generated_text, all_attentions, tokenizer, step_idx=-1, aggregation='mean'):
+    """
+    Combined word-to-word attention across all layers and heads.
+    """
+    all_tokens = tokenizer.encode(generated_text)
+    max_tokens = min(len(all_tokens), 32)
+    tokens = [tokenizer.decode([t]) for t in all_tokens[:max_tokens]]
+    
+    step_attention = all_attentions[step_idx]
+    all_matrices = []
+    
+    # Collect attention from all layers and heads
+    for layer_idx in range(len(step_attention)):
+        for head_idx in range(len(step_attention[layer_idx])):
+            attention_tensor = step_attention[layer_idx][head_idx]
+            if len(attention_tensor.shape) == 3 and attention_tensor.shape[0] == 1:
+                attention_matrix = attention_tensor.squeeze(0).cpu().numpy()
+            else:
+                attention_matrix = attention_tensor.cpu().numpy()
+            
+            attention_size = min(attention_matrix.shape[0], len(tokens))
+            tokens_subset = tokens[:attention_size]
+            attention_matrix = attention_matrix[:attention_size, :attention_size]
+            
+            # Convert to word-level
+            words, word_attention = aggregate_tokens_to_words(tokens_subset, attention_matrix)
+            all_matrices.append(word_attention)
+    
+    # Aggregate across all heads and layers
+    if not all_matrices:
+        return None
+        
+    # Ensure all matrices have the same size (use the most common size)
+    sizes = [m.shape[0] for m in all_matrices]
+    most_common_size = max(set(sizes), key=sizes.count)
+    filtered_matrices = [m for m in all_matrices if m.shape[0] == most_common_size]
+    
+    if not filtered_matrices:
+        return None
+    
+    if aggregation == 'mean':
+        combined_attention = np.mean(filtered_matrices, axis=0)
+    elif aggregation == 'max':
+        combined_attention = np.max(filtered_matrices, axis=0)
+    elif aggregation == 'sum':
+        combined_attention = np.sum(filtered_matrices, axis=0)
+    else:
+        raise ValueError(f"Unknown aggregation method: {aggregation}")
+    
+    # Get words for the most common size (reconstruct from tokens)
+    sample_matrix = filtered_matrices[0]
+    tokens_for_size = tokens[:sample_matrix.shape[0]]
+    words, _ = aggregate_tokens_to_words(tokens_for_size, sample_matrix)
+    
+    # Create heatmap
+    fig, ax = plt.subplots(figsize=(14, 12))
+    im = ax.imshow(combined_attention, cmap='plasma', aspect='auto')
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel(f"{aggregation.capitalize()} attention weight", rotation=-90, va="bottom")
+    
+    ax.set_xticks(np.arange(len(words)))
+    ax.set_yticks(np.arange(len(words)))
+    ax.set_xticklabels(words, rotation=45, ha="right")
+    ax.set_yticklabels(words)
+    
+    ax.set_title(f"Combined Word-to-Word Attention ({aggregation})\n(Overall patterns of which words refer to which)")
+    ax.set_xlabel("Attended to (what is being focused on)")
+    ax.set_ylabel("From word (what is doing the attending)")
+    
+    # Add attention values
+    threshold = np.max(combined_attention) * 0.1
+    for i in range(combined_attention.shape[0]):
+        for j in range(combined_attention.shape[1]):
+            if combined_attention[i, j] > threshold:
+                text = ax.text(j, i, f"{combined_attention[i, j]:.2f}",
+                              ha="center", va="center", 
+                              color="white" if combined_attention[i, j] > threshold*2 else "black",
+                              fontsize=8)
+    
+    plt.tight_layout()
+    return fig
+
 def visualize_attention(generated_text, all_attentions, tokenizer, step_idx=-1, layer_idx=0, head_idx=0):
     # Limit tokens for visualization
     max_tokens = 64

@@ -103,8 +103,8 @@ with st.spinner(f'🔄 Loading {model_type} model (this happens only once per se
 
 # Show which model is being used (using cached path)
 try:
-    st.info(f"🤖 Using model: `{latest_model_path}` from `{os.path.dirname(latest_model_path)}`")
-    st.info(f"🔤 Tokenizer type: subword")
+    st.info(f"🤖 Using model: `{os.path.basename(latest_model_path)}` from `{os.path.dirname(latest_model_path)}`")
+    st.info(f"🔤 Tokenizer type: Subword (BPE)")
 except Exception as e:
     st.error(f"❌ Error finding model: {e}")
 
@@ -141,7 +141,7 @@ temperature = st.slider('Temperature', 0.01, 1.0, 0.8, 0.05)
 show_attention = st.checkbox('Show attention visualizations (⚠️ Uses more memory)', value=False)
 
 if show_attention:
-    st.warning("⚠️ Attention visualizations use significant memory. Disable if experiencing crashes.")
+    st.warning("⚠️ Attention visualizations use significant memory. Disable if you are experiencing crashes.")
 
 if st.button('Generate'):
     if user_input.strip():
@@ -185,29 +185,50 @@ if st.button('Generate'):
                 st.warning("⚠️ Skipping attention visualizations due to high memory usage")
             else:
                 try:
-                    from serving import visualize_combined_attention, visualize_attention
-                    st.subheader('Attention Visualizations')
+                    from serving import (visualize_combined_input_attention, visualize_input_attention,
+                                        visualize_combined_word_attention, visualize_word_to_word_attention)
                     
-                    # Generate only essential visualizations to save memory
-                    mean_fig = visualize_combined_attention(result, all_attentions, tokenizer_obj, aggregation='mean')
-                    st.pyplot(mean_fig)
+                    st.subheader('Attention Analysis')
                     
-                    # Clean up after each visualization
-                    del mean_fig
-                    aggressive_cleanup()
+                    # Create tabs for different types of analysis
+                    tab1, tab2 = st.tabs(["🎯 Input Focus", "🔗 Word Relationships"])
                     
-                    # Only show layer-specific if memory allows
-                    memory_check = psutil.virtual_memory()
-                    if memory_check.percent < 75:
-                        layer_fig = visualize_attention(result, all_attentions, tokenizer_obj, layer_idx=0)
-                        st.pyplot(layer_fig)
-                        del layer_fig
-                        aggressive_cleanup()
-                    else:
-                        st.info("Skipped layer-specific visualization to conserve memory")
+                    with tab1:
+                        st.info("📊 Shows what parts of your input prompt the model focused on")
+                        
+                        # Show combined input attention
+                        combined_input_fig = visualize_combined_input_attention(user_input, result, all_attentions, tokenizer_obj, aggregation='mean')
+                        if combined_input_fig:
+                            st.pyplot(combined_input_fig)
+                            del combined_input_fig
+                            aggressive_cleanup()
+                    
+                    with tab2:
+                        st.info("🔗 Shows which words refer to or relate to other words (e.g., 'it' → 'bear')")
+                        
+                        # Show word-to-word attention
+                        combined_word_fig = visualize_combined_word_attention(result, all_attentions, tokenizer_obj, aggregation='mean')
+                        if combined_word_fig:
+                            st.pyplot(combined_word_fig)
+                            del combined_word_fig
+                            aggressive_cleanup()
+                        
+                        # Only show layer-specific if memory allows
+                        memory_check = psutil.virtual_memory()
+                        if memory_check.percent < 75:
+                            layer_word_fig = visualize_word_to_word_attention(result, all_attentions, tokenizer_obj, layer_idx=0, head_idx=0)
+                            if layer_word_fig:
+                                st.subheader('Layer 0 Word Relationships')
+                                st.pyplot(layer_word_fig)
+                                del layer_word_fig
+                                aggressive_cleanup()
+                        else:
+                            st.info("Skipped layer-specific visualization to conserve memory")
                         
                 except Exception as e:
                     st.error(f"❌ Error generating visualizations: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
                     aggressive_cleanup()
         
         # Final cleanup
