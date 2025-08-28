@@ -53,7 +53,7 @@ The model will be saved in pytorch (`.pt`) format and called `chat_aligned_model
 A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) 
 
 
-### License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 Both the original work by Andrej Karpathy, modifications and additions are covered under this license.
