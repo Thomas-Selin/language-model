@@ -103,7 +103,7 @@ with st.spinner(f'🔄 Loading {model_type} model (this happens only once per se
 
 # Show which model is being used (using cached path)
 try:
-    st.info(f"🤖 Using model: `{os.path.basename(latest_model_path)}` from `{os.path.dirname(latest_model_path)}`")
+    st.info(f"🤖 Using model: `{os.path.basename(latest_model_path)}`")
     st.info(f"🔤 Tokenizer type: Subword (BPE)")
 except Exception as e:
     st.error(f"❌ Error finding model: {e}")
@@ -204,7 +204,7 @@ if st.button('Generate'):
                             aggressive_cleanup()
                     
                     with tab2:
-                        st.info("🔗 Shows which words refer to or relate to other words (e.g., 'it' → 'bear')")
+                        st.info("🔗 Shows which words refer to or relate to other words (e.g., 'it' → 'bear' in the sentence \"The bear ate the cake because it was hungry\")")
                         
                         # Show word-to-word attention
                         combined_word_fig = visualize_combined_word_attention(result, all_attentions, tokenizer_obj, aggregation='mean')

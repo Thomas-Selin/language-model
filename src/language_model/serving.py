@@ -452,24 +452,18 @@ def visualize_combined_word_attention(generated_text, all_attentions, tokenizer,
     ax.set_xlabel("Attended to (what is being focused on)", fontsize=11)
     ax.set_ylabel("From word (what is doing the attending)", fontsize=11)
     
-    # Add values with better contrast logic
+    # Add values with black text
     threshold = np.percentile(combined_attention_normalized, 75)  # Top 25% of values
     for i in range(combined_attention_normalized.shape[0]):
         for j in range(combined_attention_normalized.shape[1]):
             norm_value = combined_attention_normalized[i, j]
             orig_value = combined_attention[i, j]
             if norm_value > threshold and orig_value > 0.01:  # Only show significant values
-                text_color = "white" if norm_value > np.mean(combined_attention_normalized) else "black"
+                # Use black text for all values
                 ax.text(j, i, f"{orig_value:.3f}",
                        ha="center", va="center", 
-                       color=text_color,
+                       color="black",
                        fontsize=7, weight='bold')
-    
-    # Add informative text box
-    ax.text(0.02, 0.98, "💡 Enhanced contrast mode\n   • Log-scaled values\n   • Row normalized\n   • Grid lines for clarity\n   • Top 25% values shown", 
-            transform=ax.transAxes, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.9),
-            fontsize=9)
     
     plt.tight_layout()
     return fig
