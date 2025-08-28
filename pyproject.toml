@@ -1,7 +1,7 @@
 [project]
 name = "language-model"
 version = "0.1.0"
-description = "Add your description here"
+description = "A project for training and serving language models"
 readme = "README.md"
 requires-python = "==3.11.9"
 dependencies = [
