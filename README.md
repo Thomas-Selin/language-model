@@ -11,10 +11,13 @@ The project report is available in this repo in the file:
 
 [Project report - Deep learning, Methods and applications 2025 - Thomas Selin.pdf](./Project%20report%20-%20Deep%20learning%2C%20Methods%20and%20applications%202025%20-%20Thomas%20Selin.pdf)
 
-
 ## Training data
 
 Pre-training and base training were performed using three datasets, and fine-tuning was conducted with one additional dataset. For detailed information about the datasets and their usage, see the [Project report](#project-report).
+
+## Already trained models
+
+The base-trained model and the fine-tuned/chat-aligned models are available on request (369 Mb each).
 
 ## How to run
 
