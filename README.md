@@ -22,7 +22,7 @@ The base-trained model and the fine-tuned/chat-aligned models are available on r
 ## How to run
 
 1. Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment
-2. Change venv's python version e.g.: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
+2. Set venv's python version and create venv: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
 3. Install dependencies: `uv sync`
 4. Run the `run_all.sh` file to both create, train, export and serve/inference the model via a web app.
 
