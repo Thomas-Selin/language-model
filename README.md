@@ -17,11 +17,11 @@ Pre-training/base-training were performed using three datasets, and fine-tuning 
 
 ## Already trained models
 
-The base-trained model and the fine-tuned/chat-aligned models are available on request (369 Mb each).
+The base-trained model and fine-tuned/chat-aligned models created in the project are available on request (369 Mb each).
 
 ## How to run
 
-**Note**: If you want to train a new model, you'll need parquet files for the base-training that you place in the `data/input/parquet_files` folder. You will also need the question-answer dataset, place it here `data/input/chat-align/train-00000-of-00001.parquet`. If you just want to start the UI and use the model files that I can provide on request, you can skip the training step by uncommenting `NO_TRAINING=true` at the top in `run_all.sh`.
+**Note**: If you want to train on your own data, you'll need to replace the sample training data for the base-training in the `data/input/parquet_files` folder. You should also replace the question-answer dataset, place it here `data/input/chat-align/train-00000-of-00001.parquet`. If you just want to start the UI and use the model files that I can provide on request, you can skip the training step by uncommenting `NO_TRAINING=true` at the top in `run_all.sh` and placing the model files in the subfolder in `data/output/<subfolder>` set by the  `TRAINING_START_TIME` value in `config.py`.
 
 Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment:
 
