@@ -27,7 +27,7 @@ Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment:
 
 1. Set venv's python version and create venv: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
 2. Install dependencies: `uv sync`
-3. Either run the `run_all.sh` file to both create, train, export and serve the model via a web app in which you can inference/call the model. Alternatively, you can run each step by itself by commenting out the others.
+3. Either run `./run_all.sh` file to both create, train, export and serve the model via a web app in which you can inference/call the model. Alternatively, you can run each step by itself by commenting out the others.
 
 ### Monitoring the training process
 
