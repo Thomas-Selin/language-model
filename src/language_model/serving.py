@@ -5,6 +5,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 from subword_tokenizer import SubwordTokenizer
+from helpers import get_device
 
 # Find the latest chat aligned model (.pt file)
 def find_latest_model(model_type="chat"):
@@ -35,15 +36,7 @@ def find_latest_model(model_type="chat"):
     return latest_file
 
 # Device selection - prioritize CUDA, then Metal, fall back to CPU
-if torch.cuda.is_available():
-    print("CUDA GPU is available.")
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    print("Apple Metal GPU is available.")
-    device = torch.device("mps")
-else:
-    print("No GPU available, using CPU.")
-    device = torch.device("cpu")
+device = get_device()
 
 def load_tokenizer(tokenizer_type, model_dir):
     if tokenizer_type == 'subword':

@@ -109,7 +109,8 @@ def base_train_model(
     
     # Setup optimizer and scaler
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.DEFAULT_WEIGHT_DECAY)
-    scaler = GradScaler(enabled=torch.cuda.is_available())
+    # Enable mixed precision for CUDA and MPS (Apple Metal)
+    scaler = GradScaler(enabled=(torch.cuda.is_available() or torch.backends.mps.is_available()))
     
     # Log model graph
     log_model_graph(writer, model, config.BLOCK_SIZE, device)
@@ -444,7 +445,8 @@ def train_chat_alignment(
     
     logging.info(f"Chat alignment: total_steps={total_steps}, warmup_steps={warmup_steps}, patience={patience}")
     
-    scaler = GradScaler(enabled=torch.cuda.is_available())
+    # Enable mixed precision for CUDA and MPS (Apple Metal)
+    scaler = GradScaler(enabled=(torch.cuda.is_available() or torch.backends.mps.is_available()))
     # global_step is now passed as an argument and persists across calls
     best_val_loss = float('inf')
     epochs_without_improvement = 0

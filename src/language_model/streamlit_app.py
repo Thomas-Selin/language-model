@@ -1,5 +1,6 @@
 import streamlit as st
 from serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel
+from helpers import get_device
 import torch
 import os
 import gc
@@ -33,7 +34,7 @@ def load_model_and_tokenizer(tokenizer_type='subword', model_type='chat'):
     print(f"🔄 Loading model from: {latest_model}")
     
     tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
-    device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
+    device = get_device()
     model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
     
     # Load the PyTorch model directly

@@ -9,6 +9,8 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+from helpers import get_device
+
 from serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel, quantize_model
 import torch
 import time
@@ -22,7 +24,7 @@ def test_optimized_loading():
     
     latest_model = find_latest_model()
     tokenizer = load_tokenizer('subword', os.path.dirname(latest_model))
-    device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
+    device = get_device()
     model = GPTLanguageModel(vocab_size=tokenizer.get_vocab_size())
     
     checkpoint = torch.load(latest_model, map_location=device)
