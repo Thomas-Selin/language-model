@@ -27,7 +27,8 @@ def create_bpe_tokenizer(text_files, vocab_size=MAX_VOCAB_SIZE):
 
     # Tokenizer round-trip check
     test_sentence = "There was a psychedelic rabbit, jumping over 3 fences. He liked cookies! What is the capital of France?"
-    ids = tokenizer.encode(test_sentence)
+    encoding = tokenizer.encode(test_sentence)
+    ids = encoding.ids
     decoded = tokenizer.decode(ids)
     print("Tokenizer round-trip test:")
     print("Encoded IDs:", ids)

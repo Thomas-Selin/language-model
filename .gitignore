@@ -25,6 +25,12 @@ data/output/logs/**
 !data/input/chat-align/.gitkeep
 !data/output/logs/.gitkeep
 
+# Keep specific parquet file for training
+!data/input/chat-align/train-00000-of-00001.parquet
+
+# Explicitly ignore the generated context_data.parquet
+data/input/context_data.parquet
+
 # Python-generated files
 __pycache__/
 *.py[oc]
