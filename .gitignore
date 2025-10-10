@@ -1,9 +1,29 @@
 .DS_Store
-data/output/
 .pytest_cache
 .vscode/
 .local/
+
+# Ignore all data folders and contents
 data/
+
+# Allow specific folder structures to be tracked
+!data/
+!data/input/
+!data/input/chat-align/
+!data/output/
+!data/output/logs/
+
+# Ignore all contents in data/output except logs folder
+data/output/*
+!data/output/logs/
+
+# Ignore all contents (including subfolders) in these folders
+data/input/chat-align/**
+data/output/logs/**
+
+# Keep .gitkeep files
+!data/input/chat-align/.gitkeep
+!data/output/logs/.gitkeep
 
 # Python-generated files
 __pycache__/
