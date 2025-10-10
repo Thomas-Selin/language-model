@@ -11,6 +11,21 @@ The project report is available in this repo in the file:
 
 [Project report - Deep learning, Methods and applications 2025 - Thomas Selin.pdf](./Project%20report%20-%20Deep%20learning%2C%20Methods%20and%20applications%202025%20-%20Thomas%20Selin.pdf)
 
+## Model architecture
+
+The model architecture uses the decoder only transformer architecture. It is of the type **G**enerative **P**re-trained **T**ransformer model. The key components of the architecture include:
+
+1. **Embedding Layer**: Converts input tokens into dense vectors.
+2. **Transformer Blocks**: Stacked layers of self-attention and feed-forward networks.
+3. **Output Layer**: Projects the final hidden states to the vocabulary size for token prediction.
+
+See the following diagram for a high-level overview of the architecture.
+
+**NOTE**: The attention heads are actually calculated in parallel.
+
+[Model architecture diagram](./images/model_architecture.png)
+
+
 ## Training data
 
 Pre-training/base-training were performed using three datasets, and fine-tuning was conducted with one additional dataset. For detailed information about the datasets and their usage, see the [Project report](#project-report).
@@ -57,7 +72,8 @@ touch data/output/STOP_TRAINING
 
 #### Model files
 
-The model will be saved in pytorch (`.pt`) format and called `chat_aligned_model.pt`.
+The models will be saved in pytorch (`.pt`) format in the `data/output/` directory.
+The base trained model will be called `best_model.pt` and the chat aligned model will be called `chat_aligned_model.pt`.
 
 ## Original Project: nanogpt-lecture
 A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) 

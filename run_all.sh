@@ -30,13 +30,13 @@ else
 fi
 
 # Check if required model files exist before running Streamlit app
-if [ -f "data/output/chat_aligned_model.pt" ] && [ -f "data/output/best_model_resized_vocab_12856.pt" ]; then
+if [ -f "data/output/chat_aligned_model.pt" ] && [ -f "data/output/best_model" ]; then
     echo -e "\033[34m- - Running streamlit_app.py to serve model and launch web app - -\033[0m"
     time PYTHONUNBUFFERED=1 PYTHONPATH="$PWD/src/language_model" streamlit run src/language_model/streamlit_app.py 2>&1 | tee -a $logfile
 else
     echo -e "\033[31m- - Cannot run Streamlit app: All required model files not found - -\033[0m"
     echo -e "\033[31m    Required: data/output/chat_aligned_model.pt - -\033[0m"
-    echo -e "\033[31m    Required: data/output/best_model_resized_vocab_12856.pt - -\033[0m"
+    echo -e "\033[31m    Required: data/output/best_model - -\033[0m"
 fi
 
 # Record end time and calculate total runtime
