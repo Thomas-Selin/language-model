@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 import datetime
 import logging
-from subword_tokenizer import SubwordTokenizer
+from language_model.subword_tokenizer import SubwordTokenizer
 
 
 def setup_tensorboard_logging(output_dir: str) -> SummaryWriter:

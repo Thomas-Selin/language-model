@@ -2,8 +2,8 @@ import torch
 import logging
 import os
 import json
-from torch.optim.lr_scheduler import LambdaLR
 import math
+from torch.optim.lr_scheduler import LambdaLR
 
 class ColorFormatter(logging.Formatter):
     COLORS = {

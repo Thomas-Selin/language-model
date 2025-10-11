@@ -1,4 +1,4 @@
-from config import N_EMBD, N_HEAD, N_LAYER, BLOCK_SIZE, DROPOUT
+from language_model.config import N_EMBD, N_HEAD, N_LAYER, BLOCK_SIZE, DROPOUT
 import torch
 import torch.nn as nn
 from torch.nn import functional as F

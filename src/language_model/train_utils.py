@@ -1,25 +1,29 @@
 import torch
 import torch.nn as nn
-from torch.amp import autocast, GradScaler
+try:
+    from torch.amp import autocast, GradScaler
+except ImportError:
+    # Fallback for older PyTorch versions
+    from torch.cuda.amp import autocast, GradScaler
 import gc
 import os
 import time
-from helpers import configure_colored_logging, print_memory_usage, get_device, count_parameters
-from helpers import apply_runtime_overrides, get_lr_scheduler
-from data_handler import estimate_loss, load_and_process_data, get_batch
-from model import GPTLanguageModel
-from training_helpers import (
+import logging
+import threading
+from language_model.helpers import configure_colored_logging, print_memory_usage, get_device, count_parameters
+from language_model.helpers import apply_runtime_overrides, get_lr_scheduler
+from language_model.data_handler import estimate_loss, load_and_process_data, get_batch
+from language_model.model import GPTLanguageModel
+from language_model.training_helpers import (
     wait_for_new_files_or_stop, preload_parquet_data, cleanup_processed_file,
     get_parquet_files, setup_output_directory
 )
-from tensorboard_utils import (
+from language_model.tensorboard_utils import (
     setup_tensorboard_logging, log_hyperparameters, log_model_graph,
     log_training_metrics, log_generated_samples, log_model_parameters, log_epoch_time
 )
-import config
-import logging
-from subword_tokenizer import SubwordTokenizer
-import threading
+import language_model.config as config
+from language_model.subword_tokenizer import SubwordTokenizer
 
 # Configure logging
 configure_colored_logging(config.LOG_LEVEL)
@@ -327,7 +331,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
             if losses['val'] < best_val_loss:
                 logging.info(f"Validation loss improved. Saving best model.")
                 best_val_loss = losses['val']
-                torch.save(model.state_dict(), os.path.join(output_dir, "best_model_resized_vocab_12856.pt"))
+                torch.save(model.state_dict(), os.path.join(output_dir, "best_model.pt"))
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
@@ -335,7 +339,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
             # Early stopping check
             if epochs_without_improvement >= runtime_params['early_stopping_patience']:
                 logging.info(f"Early stopping triggered. Best val loss: {best_val_loss:.4f}")
-                model.load_state_dict(torch.load(os.path.join(output_dir, "best_model_resized_vocab_12856.pt")))
+                model.load_state_dict(torch.load(os.path.join(output_dir, "best_model.pt")))
                 break
 
             # Log to TensorBoard

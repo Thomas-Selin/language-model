@@ -2,14 +2,14 @@ import torch
 import datetime
 import time
 import os
-from subword_tokenizer import SubwordTokenizer
-from helpers import get_device
-from data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
-from model import GPTLanguageModel
-from train_utils import base_train_model, train_chat_alignment
-from config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME, MAX_VOCAB_SIZE, FINETUNING_MAX_EPOCHS
 import logging
-from helpers import configure_colored_logging
+from language_model.subword_tokenizer import SubwordTokenizer
+from language_model.helpers import get_device, apply_runtime_overrides
+from language_model.model import GPTLanguageModel
+from language_model.train_utils import base_train_model, train_chat_alignment
+from language_model.config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME, FINETUNING_MAX_EPOCHS, BLOCK_SIZE, RUNTIME_OVERRIDES_FILE
+from language_model.data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
+from language_model.helpers import configure_colored_logging
 
 # Configure logging
 configure_colored_logging(LOG_LEVEL)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     logging.info("="*80 + "\n")
     
     # Check for existing checkpoint
-    checkpoint_path = os.path.join(output_dir, 'best_model_resized_vocab_12856.pt')
+    checkpoint_path = os.path.join(output_dir, 'best_model.pt')
     if os.path.exists(checkpoint_path):
         logging.info(f"Resuming base training from checkpoint: {checkpoint_path}")
     else:
@@ -64,7 +64,6 @@ if __name__ == "__main__":
     logging.info("\n" + "="*60)
     logging.info(f"\033[95m📋 CREATING QA DATASET FOR FINE-TUNING\033[0m")
     logging.info("="*60)
-    from config import BLOCK_SIZE
     block_size = BLOCK_SIZE  # Should match model config
     qa_tensor = process_qa_pairs_dataset(
         qa_parquet_path, 
@@ -80,7 +79,7 @@ if __name__ == "__main__":
     # Try to load the best available model for fine-tuning
     model_loaded = False
     model_paths_to_try = [
-        os.path.join(output_dir, 'best_model_resized_vocab_12856.pt'),
+        os.path.join(output_dir, 'best_model.pt'),
         os.path.join(output_dir, 'model_error.pt')
     ]
     
@@ -95,11 +94,11 @@ if __name__ == "__main__":
                     logging.info(f'Vocab size mismatch: checkpoint has {checkpoint_vocab_size}, need {vocab_size}')
                     logging.info('Resizing checkpoint to match actual vocabulary size...')
                     
-                    from checkpoint_resizer import resize_checkpoint_for_actual_vocab
+                    from scripts.checkpoint_resizer import resize_checkpoint_for_actual_vocab
                     resized_path = resize_checkpoint_for_actual_vocab(
                         checkpoint_path=model_path,
                         vocab_file=vocab_path,
-                        output_path=model_path.replace('.pt', f'_resized_vocab_{vocab_size}.pt')
+                        output_path=model_path
                     )
                     model.load_state_dict(torch.load(resized_path, map_location=device))
                     logging.info(f'\033[92mPre-trained model loaded from resized checkpoint: {resized_path}\033[0m')
@@ -121,9 +120,6 @@ if __name__ == "__main__":
     # Fine-tune on QA pairs
     logging.info('\n=== Starting fine-tuning on QA pairs ===')
     
-    # Set up runtime parameters for fine-tuning
-    from helpers import apply_runtime_overrides
-    from config import RUNTIME_OVERRIDES_FILE
     
     # Create a dummy optimizer to satisfy the apply_runtime_overrides function signature
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)

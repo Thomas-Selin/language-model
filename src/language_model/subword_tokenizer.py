@@ -2,8 +2,8 @@ import logging
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
 import os
 from typing import List
-from config import LOG_LEVEL, MAX_VOCAB_SIZE
-from helpers import configure_colored_logging
+from language_model.config import LOG_LEVEL, MAX_VOCAB_SIZE
+from language_model.helpers import configure_colored_logging
 
 # Configure logging
 configure_colored_logging(LOG_LEVEL)

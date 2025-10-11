@@ -1,11 +1,11 @@
-from gpt import GPTLanguageModel
 import torch
 import glob
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from subword_tokenizer import SubwordTokenizer
-from helpers import get_device
+from language_model.gpt import GPTLanguageModel
+from language_model.subword_tokenizer import SubwordTokenizer
+from language_model.helpers import get_device
 
 # Find the latest chat aligned model (.pt file)
 def find_latest_model(model_type="chat"):
@@ -24,8 +24,17 @@ def find_latest_model(model_type="chat"):
             if os.path.exists(model_file):
                 model_files.append(model_file)
     
+    # If no chat model found, try to fall back to pre-trained model
+    if not model_files and model_type == "chat":
+        print("⚠️  No chat_aligned_model.pt found, falling back to best_model_resized_vocab_12856.pt")
+        for output_dir in output_dirs:
+            if os.path.isdir(output_dir):
+                model_file = os.path.join(output_dir, 'best_model_resized_vocab_12856.pt')
+                if os.path.exists(model_file):
+                    model_files.append(model_file)
+    
     if not model_files:
-        model_name = "chat_aligned_model.pt" if model_type == "chat" else "model.pt"
+        model_name = "chat_aligned_model.pt" if model_type == "chat" else "best_model.pt"
         raise FileNotFoundError(f"No {model_name} files found in data/output/")
     
     # Sort files by modification time (most recent first)

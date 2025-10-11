@@ -1,6 +1,4 @@
 import threading
-from helpers import print_memory_usage, get_device, configure_colored_logging
-from subword_tokenizer import SubwordTokenizer
 import pandas as pd
 import torch
 from torch.amp import autocast
@@ -9,7 +7,9 @@ import datetime
 import gc
 import time
 import logging
-from config import LOG_LEVEL
+from language_model.config import LOG_LEVEL
+from language_model.helpers import print_memory_usage, get_device, configure_colored_logging
+from language_model.subword_tokenizer import SubwordTokenizer
 
 # Configure logging
 configure_colored_logging(LOG_LEVEL)
