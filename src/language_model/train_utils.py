@@ -9,11 +9,12 @@ import gc
 import os
 import time
 import logging
+import traceback
 import threading
 from typing import Optional
 from language_model.helpers import configure_colored_logging, print_memory_usage, get_device, count_parameters
 from language_model.helpers import apply_runtime_overrides, get_lr_scheduler
-from language_model.data_handler import load_and_process_data, get_batch
+from language_model.data_handler import load_and_process_data, get_batch, get_sequential_batches
 from language_model.evaluation import estimate_loss
 from language_model.checkpointing import save_best_model
 from language_model.model import GPTLanguageModel
@@ -120,10 +121,9 @@ def base_train_model(
     # Apply memory optimizations
     optimize_memory_settings()
 
-    config.MAX_VOCAB_SIZE = 12856
-
-    # Create model
-    model = GPTLanguageModel(config.MAX_VOCAB_SIZE).to(device)
+    # Create / restore model using configured vocab size (do not mutate config at runtime)
+    vocab_size = getattr(config, 'MAX_VOCAB_SIZE')
+    model = GPTLanguageModel(vocab_size).to(device)
     if checkpoint_path and os.path.exists(checkpoint_path):
         try:
             model.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -147,19 +147,19 @@ def base_train_model(
     
     # Runtime parameters
     runtime_params = {
-        'eval_interval': config.EVAL_INTERVAL,
+        'eval_step_interval': max(1, config.BATCH_SIZE),  # evaluate every roughly one batch worth of sequences (can be overridden)
         'batch_size': config.BATCH_SIZE,
         'block_size': config.BLOCK_SIZE,
-        'grad_clip_norm': 1.0,
         'dropout': config.DROPOUT,
-        'early_stopping_patience': config.EARLY_STOPPING_PATIENCE,
-        'warmup_steps': config.WARMUP_STEPS,
+        'early_stopping_patience_steps': config.EARLY_STOPPING_PATIENCE * 10,  # convert epoch patience heuristic to steps default
         'lr_decay': config.LR_DECAY,
         'learning_rate': config.LEARNING_RATE,
-        'base_training_max_epochs': config.BASE_TRAINING_MAX_EPOCHS,
-        'finetuning_max_epochs': config.FINETUNING_MAX_EPOCHS,
         'log_level': config.LOG_LEVEL
     }
+
+    # Track best validation and early stopping in steps
+    best_val_loss_global = float('inf')
+    steps_without_improvement = 0
     
     stop_file_path = "data/output/STOP_TRAINING"
     
@@ -275,18 +275,59 @@ def base_train_model(
                     log_hyperparameters(writer, config_dict)
                     tensorboard_logged = True
 
-                best_val_loss, global_iter = _train_on_file(
-                    model, train_data, val_data, optimizer, scaler, writer,
-                    runtime_params, global_iter, output_dir
-                )
+                # Per-file training: treat each file as a restart for cosine if desired.
+                # Cosine restart: reinstantiate scheduler per file if lr_decay is cosine.
+                steps_in_file = max(1, (len(train_data) - runtime_params['block_size'] - 1) // runtime_params['batch_size'])
+                warmup_steps_local = max(1, int(0.02 * steps_in_file))
+                scheduler = get_lr_scheduler(optimizer, warmup_steps_local, runtime_params['lr_decay'], steps_in_file)
+
+                file_best_val = float('inf')
+                file_steps = 0
+                model.train()
+                for xb, yb in get_sequential_batches(runtime_params['block_size'], runtime_params['batch_size'], train_data, device, shuffle=True):
+                    file_steps += 1
+                    global_iter += 1
+                    with autocast(device_type=device.type, enabled=torch.cuda.is_available()):
+                        logits, loss = model(xb, yb)
+                    if torch.isnan(loss):
+                        raise RuntimeError("NaN loss detected")
+                    optimizer.zero_grad(set_to_none=True)
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scheduler.step()
+
+                    # Step-based evaluation
+                    if global_iter % runtime_params['eval_step_interval'] == 0:
+                        losses = estimate_loss(model, train_data, val_data, config.EVAL_ITERS,
+                                               runtime_params['block_size'], runtime_params['batch_size'], device)
+                        current_val = losses['val']
+                        current_train = losses['train']
+                        log_training_metrics(writer, losses, global_iter, scheduler.get_last_lr()[0])
+                        if current_val < file_best_val:
+                            file_best_val = current_val
+                        # Global improvement tracking
+                        if current_val < best_val_loss_global:
+                            best_val_loss_global = current_val
+                            steps_without_improvement = 0
+                            save_best_model(model, output_dir, "best_model.pt")
+                        else:
+                            steps_without_improvement += runtime_params['eval_step_interval']
+                        # Early stopping by steps
+                        if steps_without_improvement >= runtime_params['early_stopping_patience_steps']:
+                            logging.info(f"Early stopping triggered at step {global_iter}. Best global val loss: {best_val_loss_global:.4f}")
+                            raise StopIteration
+
+                    if file_steps >= steps_in_file:
+                        break
 
                 # ==================== TRAINING COMPLETION DIVIDER ====================
                 logging.info("\n" + "="*80)
                 current_time = time.strftime('%Y-%m-%d %H:%M:%S')
                 logging.info(f"\033[92m✅ COMPLETED TRAINING ON FILE {file_idx+1}/{file_count} | Time: {current_time}\033[0m")
                 logging.info(f"\033[92m📁 FILE: {os.path.basename(parquet_file)}\033[0m")
-                logging.info(f"\033[92m🎯 BEST VALIDATION LOSS: {best_val_loss:.4f}\033[0m")
-                logging.info(f"\033[92m🔢 GLOBAL ITERATION: {global_iter}\033[0m")
+                logging.info(f"\033[92m🎯 BEST VAL (FILE): {file_best_val:.4f}\033[0m")
+                logging.info(f"\033[92m🧮 GLOBAL STEP: {global_iter}\033[0m")
                 file_end_time = time.time()
                 file_duration = file_end_time - file_start_time
                 logging.info(f"\033[92m⏰ TOTAL DURATION: {file_duration:.2f} seconds ({file_duration/60:.2f} min)\033[0m")
@@ -301,10 +342,15 @@ def base_train_model(
             if user_interrupted:
                 break
 
+    except StopIteration:
+        logging.info("Training stopped early due to early stopping condition.")
     except Exception as e:
-        logging.error(f"An error occurred during training: {e}")
-        save_best_model(model, output_dir, "model_error.pt")
-        logging.info("Model saved to model_error.pt due to error")
+        logging.error("An error occurred during training:\n" + traceback.format_exc())
+        try:
+            save_best_model(model, output_dir, "model_error.pt")
+            logging.info("Model saved to model_error.pt due to error")
+        finally:
+            raise
     finally:
         # Clean up any running preload thread
         if preload_thread is not None and preload_thread.is_alive():
@@ -337,7 +383,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
     steps_per_epoch = (max_start_idx + runtime_params['batch_size'] - 1) // runtime_params['batch_size']
     total_steps = runtime_params['base_training_max_epochs'] * steps_per_epoch
     
-    # Setup scheduler for this file
+    # Setup scheduler for this file - warmup is 2% of total steps (standard practice)
     warmup_steps_local = max(1, int(0.02 * total_steps))
     scheduler = get_lr_scheduler(optimizer, warmup_steps_local,
                                runtime_params['lr_decay'], total_steps)

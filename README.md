@@ -47,11 +47,25 @@ Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment:
 
 Run `tensorboard --logdir=.` in the `data/output/tensorboard_logs` to serve a UI for monitoring training
 
-### Adjusting training parameters during training process
+## Adjusting training parameters during training process
 
-In the file `RUNTIME_OVERRIDES.json` you can override the intial parameters specified in `config.py` during training.
+The training process supports dynamic runtime overrides, allowing you to adjust key parameters without restarting or modifying the main configuration files. This is useful for tuning hyperparameters, batch sizes, learning rates, or other settings while training is in progress.
 
-### Stopping base training and continue with fine-tuning
+- **Override file location:** Place your overrides in the `RUNTIME_OVERRIDES.json` file at the project root.
+- **Supported parameters:** Any parameter defined in `src/language_model/config.py` can be overridden. Common examples include `learning_rate`, `batch_size`, and `max_iters`.
+- **How it works:** During training, the system periodically checks for updates in `RUNTIME_OVERRIDES.json`. If changes are detected, the new values are applied immediately to the running process.
+- **Example override file:**
+
+```json
+{
+  "learning_rate": 0.0005,
+  "batch_size": 32,
+  "early_stopping_patience": 10000,
+  "log_level": "DEBUG"
+}
+```
+
+## Stopping base training and continue with fine-tuning
 
 Open a new terminal and run:
 ```bash

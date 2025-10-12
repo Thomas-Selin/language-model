@@ -29,7 +29,7 @@ if __name__ == "__main__":
     context_parquet_path = CONTEXT_PARQUET_PATH
     prepare_context_data_for_training(qa_parquet_path, context_parquet_path, text_column=text_column)
     logging.info(f"Context data extracted to {context_parquet_path}")
-    logging.info("This file should be included in base training at the end by moving it to the parquet_files directory.")
+    logging.info("This file can be included in base training by moving it to the parquet_files directory. This will ensure the model has seen the context for the QA pairs during base training.")
 
     # Base training - now uses train_and_poll for polling and deletion
     # ==================== BASE TRAINING START DIVIDER ====================

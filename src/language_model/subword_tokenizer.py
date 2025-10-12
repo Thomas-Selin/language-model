@@ -70,7 +70,7 @@ class SubwordTokenizer:
         return tokenizer
 
     @staticmethod
-    def save_vocab(tokenizer, path="data/output/tokenizer.json"):
+    def save_vocab(tokenizer, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tokenizer.save(path)
         logging.info(f"Tokenizer saved to {path}")

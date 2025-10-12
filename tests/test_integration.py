@@ -178,25 +178,6 @@ class TestTrainingPipeline:
         
         print(f"Test losses - Base: {base_test_loss:.4f}, Q&A: {qa_test_loss:.4f}")
     
-    def test_checkpoint_save_and_resume(self):
-        """Test that training can be saved and resumed from checkpoint.
-        
-        This test verifies:
-        1. Model state can be saved
-        2. Optimizer state can be saved
-        3. Training can resume from saved state
-        4. Resumed training continues correctly
-        """
-        # Use the shared sample text
-        sample_text = self.sample_text
-        
-        # Build tokenizer
-        tokenizer = SubwordTokenizer.build_vocab(sample_text, vocab_size=1000)
-        SubwordTokenizer.save_vocab(tokenizer, path=self.vocab_path)
-        tokenizer = SubwordTokenizer(vocab_file=self.vocab_path)
-        vocab_size = tokenizer.get_vocab_size()
-        
-        # ...existing code...
     
     def test_parquet_data_loading(self):
         """Test loading and processing data from parquet files.

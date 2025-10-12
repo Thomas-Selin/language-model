@@ -323,8 +323,16 @@ class GPTLanguageModel(nn.Module):
             If return_attention is True:
                 Tuple of (generated indices, list of attention weights per step)
         """
+        # Ensure input tokens are on the same device as model parameters to avoid device mismatch
+        model_device = next(self.parameters()).device
+        idx = idx.to(model_device)
+
+        # Disable checkpointing for generation to avoid unnecessary recomputation
+        use_ckpt_original = self.use_checkpoint
+        self.use_checkpoint = False
+
         all_attentions = [] if return_attention else None
-        
+
         for _ in range(max_new_tokens):
             # Crop to last block_size tokens for efficiency
             idx_conditioned = idx[:, -block_size:]
@@ -371,5 +379,7 @@ class GPTLanguageModel(nn.Module):
             # Check for end-of-sequence token (id 2)
             if (next_token == 2).any():
                 break
-        
+
+        # Restore checkpointing flag
+        self.use_checkpoint = use_ckpt_original
         return (idx, all_attentions) if return_attention else idx

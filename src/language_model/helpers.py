@@ -186,7 +186,7 @@ def apply_runtime_overrides(optimizer, scheduler, params: dict, runtime_override
                 logging.info(f"[RUNTIME] Set weight decay to {wd}")
                 
             # Training parameters
-            for param_name in ["eval_interval", "batch_size", "block_size", "early_stopping_patience", "warmup_steps", "base_training_max_epochs", "finetuning_max_epochs"]:
+            for param_name in ["eval_interval", "batch_size", "block_size", "early_stopping_patience", "base_training_max_epochs", "finetuning_max_epochs"]:
                 if param_name in overrides:
                     value = int(overrides[param_name])
                     if value > 0:
