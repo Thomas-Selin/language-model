@@ -5,7 +5,6 @@ Run this from another terminal while training is running.
 """
 
 import os
-import sys
 
 def stop_training():
     stop_file_path = "../data/output/STOP_TRAINING"

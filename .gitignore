@@ -26,7 +26,7 @@ data/output/logs/**
 !data/output/logs/.gitkeep
 
 # Keep specific parquet file for training
-!data/input/chat-align/train-00000-of-00001.parquet
+!data/input/chat-align/question_answer_dataset.parquet
 
 # Explicitly ignore the generated context_data.parquet
 data/input/context_data.parquet

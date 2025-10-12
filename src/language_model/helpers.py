@@ -19,7 +19,12 @@ class ColorFormatter(logging.Formatter):
         record.levelname_colored = f"{color}{record.levelname}{self.RESET}"
         return super().format(record)
 
-def configure_colored_logging(level):
+def configure_colored_logging(level: str) -> None:
+    """Configure colored logging with the specified level.
+    
+    Args:
+        level: Logging level string (e.g., 'DEBUG', 'INFO')
+    """
     formatter = ColorFormatter('[%(levelname_colored)s] [%(threadName)s] %(message)s')
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
@@ -59,7 +64,12 @@ def update_log_level(new_level: str):
     except Exception as e:
         logging.error(f"[RUNTIME] Failed to update log level: {e}")
 
-def get_device():
+def get_device() -> torch.device:
+    """Get the best available device for PyTorch computations.
+    
+    Returns:
+        torch.device: CUDA if available, else MPS if available, else CPU
+    """
     if torch.cuda.is_available():
         logging.info("CUDA GPU will be used.")
         return torch.device("cuda")
@@ -70,24 +80,22 @@ def get_device():
         logging.info("No GPU available, CPU will be used.")
         return torch.device("cpu")
         
-def print_memory_usage():
+def print_memory_usage() -> None:
     """Print percentage of RAM, GPU memory used, and disk usage for current directory."""
     try:
         import psutil
-        import os
         total_mem = psutil.virtual_memory().total
         used_mem = psutil.virtual_memory().used
         ram_percent = used_mem / total_mem * 100
         logging.info(f"RAM usage: {ram_percent:.2f}% of system memory")
     except ImportError:
-        logging.info("Could not import psutil. Install with 'pip install psutil' to monitor memory usage.")
+        logging.warning("Could not import psutil. Install with 'pip install psutil' to monitor memory usage.")
         return
     except Exception as e:
-        logging.info(f"Error checking RAM usage: {e}")
+        logging.error(f"Error checking RAM usage: {e}")
         return
 
     try:
-        import torch
         if torch.cuda.is_available():
             total_gpu = torch.cuda.get_device_properties(0).total_memory
             allocated_gpu = torch.cuda.memory_allocated()
@@ -95,13 +103,12 @@ def print_memory_usage():
             logging.info(f"GPU usage: \033[93m{gpu_percent:.2f}%\033[0m of GPU memory")
         else:
             logging.info("No CUDA GPU available.")
-    except ImportError:
-        logging.info("Could not import torch. Install with 'pip install torch' to monitor GPU usage.")
     except Exception as e:
-        logging.info(f"Error checking GPU usage: {e}")
+        logging.error(f"Error checking GPU usage: {e}")
 
     # Disk usage for current directory
     try:
+        import psutil
         current_path = os.getcwd()
         usage = psutil.disk_usage(current_path)
         logging.info(
@@ -110,7 +117,7 @@ def print_memory_usage():
             f"{usage.free / (1024 ** 3):.2f} GiB free)"
         )
     except Exception as e:
-        logging.info(f"Error checking disk usage: {e}")
+        logging.error(f"Error checking disk usage: {e}")
 
 
 def wait_for_keypress():
@@ -123,7 +130,15 @@ def wait_for_keypress():
     logging.info("Continuing with next batch...")
 
 
-def count_parameters(model):
+def count_parameters(model: torch.nn.Module) -> int:
+    """Count the total number of parameters in a PyTorch model.
+    
+    Args:
+        model: PyTorch model
+        
+    Returns:
+        int: Total number of parameters
+    """
     return sum(p.numel() for p in model.parameters())
 
 

@@ -1,6 +1,7 @@
 import torch
 import glob
 import os
+import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from language_model.gpt import GPTLanguageModel
@@ -19,17 +20,17 @@ def find_latest_model(model_type="chat"):
             if model_type == "chat":
                 model_file = os.path.join(output_dir, 'chat_aligned_model.pt')
             else:  # pre-trained
-                model_file = os.path.join(output_dir, 'best_model_resized_vocab_12856.pt')
+                model_file = os.path.join(output_dir, 'best_model.pt')
             
             if os.path.exists(model_file):
                 model_files.append(model_file)
     
     # If no chat model found, try to fall back to pre-trained model
     if not model_files and model_type == "chat":
-        print("⚠️  No chat_aligned_model.pt found, falling back to best_model_resized_vocab_12856.pt")
+        logging.warning("⚠️  No chat_aligned_model.pt found, falling back to best_model.pt")
         for output_dir in output_dirs:
             if os.path.isdir(output_dir):
-                model_file = os.path.join(output_dir, 'best_model_resized_vocab_12856.pt')
+                model_file = os.path.join(output_dir, 'best_model.pt')
                 if os.path.exists(model_file):
                     model_files.append(model_file)
     
@@ -41,7 +42,7 @@ def find_latest_model(model_type="chat"):
     latest_file = max(model_files, key=os.path.getmtime)
     
     model_description = "chat aligned" if model_type == "chat" else "pre-trained"
-    print(f"Loading latest {model_description} model: {latest_file}")
+    logging.info(f"Loading latest {model_description} model: {latest_file}")
     return latest_file
 
 # Device selection - prioritize CUDA, then Metal, fall back to CPU
@@ -49,9 +50,10 @@ device = get_device()
 
 def load_tokenizer(tokenizer_type, model_dir):
     if tokenizer_type == 'subword':
-        # Get the project root directory (two levels up from this file)
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        vocab_path = os.path.join(project_root, 'data', 'output', 'vocab_subword.json')
+        # Look for vocab file in the model directory
+        vocab_path = os.path.join(model_dir, 'vocab_subword.json')
+        if not os.path.exists(vocab_path):
+            raise FileNotFoundError(f"Vocab file not found at {vocab_path}")
         return SubwordTokenizer(vocab_file=vocab_path)
     else:
         raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
@@ -181,12 +183,20 @@ def visualize_input_attention(prompt, generated_text, all_attentions, tokenizer,
         words.append(current_word.strip())
         word_attentions.append(current_attention / token_count)
     
+    # Return None if no words were extracted
+    if not words or not word_attentions:
+        logging.warning("No words extracted for attention visualization")
+        return None
+    
     # Create bar plot
     fig, ax = plt.subplots(figsize=(12, 6))
     bars = ax.bar(range(len(words)), word_attentions, color='viridis')
     
     # Color bars by attention strength
-    max_attention = max(word_attentions) if word_attentions else 1
+    max_attention = max(word_attentions) if word_attentions else 1.0
+    # Avoid division by zero
+    if max_attention == 0:
+        max_attention = 1.0
     for i, (bar, attention) in enumerate(zip(bars, word_attentions)):
         bar.set_color(plt.cm.viridis(attention / max_attention))
     
@@ -272,12 +282,20 @@ def visualize_combined_input_attention(prompt, generated_text, all_attentions, t
         words.append(current_word.strip())
         word_attentions.append(current_attention / token_count)
     
+    # Return None if no words were extracted
+    if not words or not word_attentions:
+        logging.warning("No words extracted for attention visualization")
+        return None
+    
     # Create bar plot
     fig, ax = plt.subplots(figsize=(14, 7))
     bars = ax.bar(range(len(words)), word_attentions)
     
     # Color bars by attention strength
-    max_attention = max(word_attentions) if word_attentions else 1
+    max_attention = max(word_attentions) if word_attentions else 1.0
+    # Avoid division by zero
+    if max_attention == 0:
+        max_attention = 1.0
     for i, (bar, attention) in enumerate(zip(bars, word_attentions)):
         bar.set_color(plt.cm.plasma(attention / max_attention))
     
@@ -557,7 +575,7 @@ def generate_text(prompt, max_new_tokens=50, temperature=0.8, tokenizer_type='su
                  model=None, tokenizer=None, device=None, enable_kv_cache=True):
     # Only load model if not provided (for backward compatibility)
     if model is None or tokenizer is None or device is None:
-        print("⚠️  Loading model in generate_text - consider passing pre-loaded model for better performance")
+        logging.warning("⚠️  Loading model in generate_text - consider passing pre-loaded model for better performance")
         latest_model = find_latest_model()
         tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
         device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
@@ -576,7 +594,7 @@ def generate_text(prompt, max_new_tokens=50, temperature=0.8, tokenizer_type='su
         if hasattr(torch, 'compile') and device.type != 'mps':  # torch.compile not supported on MPS yet
             model = torch.compile(model, mode='reduce-overhead')
     else:
-        print("✅ Using pre-loaded model for generation")
+        logging.info("✅ Using pre-loaded model for generation")
     
     eos_token_id = getattr(tokenizer, 'eos_token_id', None)
     
@@ -603,7 +621,7 @@ def generate_text(prompt, max_new_tokens=50, temperature=0.8, tokenizer_type='su
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     cleanup_memory()
-                    print(f"❌ OOM Error during generation: {e}")
+                    logging.error(f"❌ OOM Error during generation: {e}")
                     raise RuntimeError("Out of memory during text generation. Try reducing max_new_tokens or using a smaller prompt.")
                 else:
                     raise e
@@ -629,5 +647,3 @@ def cleanup_memory():
     elif torch.backends.mps.is_available():
         torch.mps.empty_cache()
         torch.mps.synchronize()
-    elif torch.backends.mps.is_available():
-        torch.mps.empty_cache()

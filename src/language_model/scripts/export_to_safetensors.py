@@ -3,11 +3,9 @@ import json
 import torch
 import shutil
 from safetensors.torch import save_model
-from src.language_model.gpt import GPTLanguageModel
+from language_model.gpt import GPTLanguageModel
 from datetime import datetime
-from src.language_model.config import BLOCK_SIZE, TRAINING_START_TIME
-
-CURRENT_MODEL_FOLDER = "20250810-095241"
+from language_model.config import BLOCK_SIZE
 
 def export_model_as_safetensors():
      # Create export directory structure with timestamp
@@ -16,7 +14,7 @@ def export_model_as_safetensors():
      os.makedirs(export_path, exist_ok=True)
      
      # Load vocabulary size from the saved file
-     with open(os.path.join('data', 'output', CURRENT_MODEL_FOLDER, 'vocab_subword.json'), 'r', encoding='utf-8') as f:
+     with open(os.path.join('data', 'output', 'vocab_subword.json'), 'r', encoding='utf-8') as f:
           vocab_data = json.load(f)
      vocab_size = len(vocab_data["model"]["vocab"])  # Access the nested vocabulary dictionary
      print(f"Vocabulary size: {vocab_size}")
@@ -29,7 +27,7 @@ def export_model_as_safetensors():
           device = torch.device('mps')
      else:
           device = torch.device('cpu')
-     model.load_state_dict(torch.load(f"data/output/{CURRENT_MODEL_FOLDER}/chat_aligned_model.pt", map_location=device))
+     model.load_state_dict(torch.load(f"data/output/chat_aligned_model.pt", map_location=device))
      model.to(device)
      model.eval()
      
@@ -66,7 +64,7 @@ def export_model_as_safetensors():
           json.dump(config, f, indent=2)
      
      # Load the vocabulary from the saved file
-     with open(os.path.join('data', 'output', CURRENT_MODEL_FOLDER, 'vocab_subword.json'), 'r', encoding='utf-8') as f:
+     with open(os.path.join('data', 'output', 'vocab_subword.json'), 'r', encoding='utf-8') as f:
           vocab_data = json.load(f)
 
      # Save vocabulary for tokenizer

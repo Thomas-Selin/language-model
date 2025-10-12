@@ -10,9 +10,12 @@ import os
 import time
 import logging
 import threading
+from typing import Optional
 from language_model.helpers import configure_colored_logging, print_memory_usage, get_device, count_parameters
 from language_model.helpers import apply_runtime_overrides, get_lr_scheduler
-from language_model.data_handler import estimate_loss, load_and_process_data, get_batch
+from language_model.data_handler import load_and_process_data, get_batch
+from language_model.evaluation import estimate_loss
+from language_model.checkpointing import save_best_model
 from language_model.model import GPTLanguageModel
 from language_model.training_helpers import (
     wait_for_new_files_or_stop, preload_parquet_data, cleanup_processed_file,
@@ -24,6 +27,11 @@ from language_model.tensorboard_utils import (
 )
 import language_model.config as config
 from language_model.subword_tokenizer import SubwordTokenizer
+from language_model.constants import (
+    GPU_MEMORY_FRACTION, 
+    HIGH_MEMORY_THRESHOLD_GB, 
+    RESERVED_MEMORY_THRESHOLD_GB,
+)
 
 # Configure logging
 configure_colored_logging(config.LOG_LEVEL)
@@ -34,15 +42,22 @@ device = get_device()
 # Add a lock for thread safety
 preload_lock = threading.Lock()
 
-def optimize_memory_settings():
-    """Configure optimal memory settings for training"""
+def optimize_memory_settings() -> None:
+    """Configure optimal memory settings for training.
+    
+    Applies several optimizations:
+    - Enables flash attention if available (CUDA)
+    - Sets GPU memory fraction to prevent OOM
+    - Enables cudNN benchmarking for speed
+    """
     # Enable memory-efficient attention if available
     if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
         torch.backends.cuda.enable_flash_sdp(True)
     
     # Set memory fraction to leave some headroom
     if torch.cuda.is_available():
-        torch.cuda.set_per_process_memory_fraction(0.90)  # Use 90% of GPU memory max
+        torch.cuda.set_per_process_memory_fraction(GPU_MEMORY_FRACTION)
+        logging.info(f"Set GPU memory fraction to {GPU_MEMORY_FRACTION:.1%}")
     
     # Enable cudNN benchmark for consistent input sizes
     torch.backends.cudnn.benchmark = True
@@ -58,27 +73,34 @@ def aggressive_memory_cleanup():
     if hasattr(torch, "mps") and torch.backends.mps.is_available():
         torch.mps.empty_cache()
 
-def log_memory_usage(step_name="", global_iter=None):
-    """Log current memory usage for debugging"""
+def log_memory_usage(step_name: str = "", global_iter: Optional[int] = None) -> None:
+    """Log current GPU memory usage for debugging.
+    
+    Args:
+        step_name: Descriptive name for the current step (e.g., "before_eval")
+        global_iter: Current training iteration number for context
+    """
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1e9
         reserved = torch.cuda.memory_reserved() / 1e9
         max_allocated = torch.cuda.max_memory_allocated() / 1e9
         
         step_info = f"[Step {global_iter}] " if global_iter else ""
-        logging.debug(f"{step_info}GPU Memory {step_name}: Alloc={allocated:.2f}GB, Reserved={reserved:.2f}GB, Max={max_allocated:.2f}GB")
+        logging.debug(
+            f"{step_info}GPU Memory {step_name}: "
+            f"Alloc={allocated:.2f}GB, Reserved={reserved:.2f}GB, Max={max_allocated:.2f}GB"
+        )
         
         # Warning if memory usage is high
-        if allocated > 18.0:  # > 18GB on 24GB GPU
+        if allocated > HIGH_MEMORY_THRESHOLD_GB:
             logging.warning(f"High GPU memory usage detected: {allocated:.2f}GB allocated")
-        if reserved > 20.0:  # > 20GB reserved
+        if reserved > RESERVED_MEMORY_THRESHOLD_GB:
             logging.warning(f"High reserved GPU memory: {reserved:.2f}GB reserved")
 
 def base_train_model(
     parquet_dir_path: str,
     text_column: str = 'text',
     vocab_path: str = 'data/output/vocab_subword.json',
-    training_start_time: str = None,
     output_dir: str = None,
     checkpoint_path: str = None
 ) -> int:
@@ -89,7 +111,7 @@ def base_train_model(
     """
     # Setup directories and logging
     if output_dir is None:
-        output_dir = os.path.join('data', 'output', training_start_time)
+        output_dir = os.path.join('data', 'output')
     setup_output_directory(output_dir)
     
     # Initialize TensorBoard
@@ -113,8 +135,8 @@ def base_train_model(
     
     # Setup optimizer and scaler
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.DEFAULT_WEIGHT_DECAY)
-    # Enable mixed precision for CUDA and MPS (Apple Metal)
-    scaler = GradScaler(enabled=(torch.cuda.is_available() or torch.backends.mps.is_available()))
+    # Enable mixed precision only for CUDA (MPS has issues with GradScaler in some PyTorch versions)
+    scaler = GradScaler(enabled=torch.cuda.is_available())
     
     # Log model graph
     log_model_graph(writer, model, config.BLOCK_SIZE, device)
@@ -287,7 +309,7 @@ def base_train_model(
 
     except Exception as e:
         logging.error(f"An error occurred during training: {e}")
-        torch.save(model.state_dict(), os.path.join(output_dir, "model_error.pt"))
+        save_best_model(model, output_dir, "model_error.pt")
         logging.info("Model saved to model_error.pt due to error")
     finally:
         # Clean up any running preload thread
@@ -329,9 +351,9 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
 
             # Save best model
             if losses['val'] < best_val_loss:
-                logging.info(f"Validation loss improved. Saving best model.")
+                logging.info(f"🎉 Validation loss improved. Saving best model.")
                 best_val_loss = losses['val']
-                torch.save(model.state_dict(), os.path.join(output_dir, "best_model.pt"))
+                save_best_model(model, output_dir, "best_model.pt")
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
@@ -370,7 +392,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
         
         for micro_step in range(gradient_accumulation_steps):
             xb, yb = get_batch(runtime_params['block_size'], runtime_params['batch_size'],
-                              'train', train_data, val_data)
+                              'train', train_data, val_data, device)
 
             with autocast(device_type=device.type):
                 logits, loss = model(xb, yb)
@@ -449,8 +471,8 @@ def train_chat_alignment(
     
     logging.info(f"Chat alignment: total_steps={total_steps}, warmup_steps={warmup_steps}, patience={patience}")
     
-    # Enable mixed precision for CUDA and MPS (Apple Metal)
-    scaler = GradScaler(enabled=(torch.cuda.is_available() or torch.backends.mps.is_available()))
+    # Enable mixed precision only for CUDA (MPS has issues with GradScaler in some PyTorch versions)
+    scaler = GradScaler(enabled=torch.cuda.is_available())
     # global_step is now passed as an argument and persists across calls
     best_val_loss = float('inf')
     epochs_without_improvement = 0
@@ -557,7 +579,7 @@ def train_chat_alignment(
     logging.info("="*80 + "\n")
     
     # Save final model
-    torch.save(model.state_dict(), os.path.join(output_dir, "chat_aligned_model.pt"))
+    save_best_model(model, output_dir, "chat_aligned_model.pt")
     logging.info("Final chat-aligned model saved to chat_aligned_model.pt")
     
     if writer:

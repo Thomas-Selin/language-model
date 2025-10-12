@@ -7,9 +7,8 @@ import time
 import logging
 import glob
 import threading
-from typing import Tuple, Optional, Set
-from data_handler import load_and_process_data
-import config
+from typing import Tuple, Optional
+from language_model.data_handler import load_and_process_data
 
 
 def is_file_ready_for_training(file_path: str, min_size_bytes: int, stable_count_threshold: int,
@@ -162,11 +161,11 @@ def cleanup_processed_file(file_path: str) -> None:
         os.remove(file_path)
         logging.info(f"Deleted file after training: {file_path}")
     except FileNotFoundError:
-        logging.info(f"File not found when deleting {file_path}")
+        logging.warning(f"File not found when deleting {file_path}")
     except PermissionError as e:
-        logging.info(f"Permission error when deleting {file_path}: {e}")
+        logging.error(f"Permission error when deleting {file_path}: {e}")
     except Exception as e:
-        logging.info(f"Error deleting file {file_path}: {e}")
+        logging.error(f"Error deleting file {file_path}: {e}")
 
 
 def get_parquet_files(parquet_dir_path: str) -> list:

@@ -13,7 +13,7 @@ def print_model_size(model_path):
     print(f"Total parameter size: {total_bytes / (1024 ** 2):.2f} MB ({total_bytes} bytes)")
 
 if __name__ == "__main__":
-    model_path = "data/output/20250810-095241/best_model.pt"
+    model_path = "data/output/best_model.pt"
     if not os.path.exists(model_path):
         print(f"File not found: {model_path}")
     else:

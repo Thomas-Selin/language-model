@@ -3,14 +3,12 @@
 Test script to verify memory optimizations are working
 """
 import os
-import sys
-sys.path.append('src')
 
 import torch
-from train_utils import optimize_memory_settings, aggressive_memory_cleanup
-from model import GPTLanguageModel
-from config import MAX_VOCAB_SIZE, BATCH_SIZE, BLOCK_SIZE, N_EMBD
-from helpers import get_device
+from language_model.train_utils import optimize_memory_settings, aggressive_memory_cleanup
+from language_model.model import GPTLanguageModel
+from language_model.config import MAX_VOCAB_SIZE, BATCH_SIZE, BLOCK_SIZE, N_EMBD
+from language_model.helpers import get_device
 
 def test_memory_setup():
     """Test memory configuration and allocation"""
@@ -92,11 +90,9 @@ def test_memory_setup():
             print("1. Reduce BATCH_SIZE in config.py")
             print("2. Enable gradient accumulation")
             print("3. Use gradient checkpointing")
-            return False
+            assert False, f"Out of memory error: {e}"
         else:
             raise e
-    
-    return True
 
 if __name__ == "__main__":
     # Set the CUDA allocator config programmatically as backup

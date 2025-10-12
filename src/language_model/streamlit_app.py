@@ -1,10 +1,11 @@
 import streamlit as st
-from serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel
-from helpers import get_device
 import torch
 import os
 import gc
 import psutil
+import logging
+from language_model.serving import generate_text, find_latest_model, load_tokenizer, GPTLanguageModel
+from language_model.helpers import get_device
 
 
 @st.cache_resource
@@ -15,7 +16,7 @@ def load_model_and_tokenizer(tokenizer_type='subword', model_type='chat'):
     memory_info = psutil.virtual_memory()
     available_gb = memory_info.available / (1024**3)
     total_gb = memory_info.total / (1024**3)
-    print(f"💾 System Memory: {available_gb:.1f}GB free / {total_gb:.1f}GB total")
+    logging.info(f"💾 System Memory: {available_gb:.1f}GB free / {total_gb:.1f}GB total")
     
     if available_gb < 4.0:  # Less than 4GB free
         st.warning(f"⚠️ Low system memory ({available_gb:.1f}GB free). Consider closing other applications.")
@@ -25,13 +26,13 @@ def load_model_and_tokenizer(tokenizer_type='subword', model_type='chat'):
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
         gpu_allocated = torch.cuda.memory_allocated(0) / 1024**3
         gpu_free = gpu_memory - gpu_allocated
-        print(f"💾 GPU Memory: {gpu_free:.1f}GB free / {gpu_memory:.1f}GB total")
+        logging.info(f"💾 GPU Memory: {gpu_free:.1f}GB free / {gpu_memory:.1f}GB total")
         
         if gpu_free < 2.0:  # Less than 2GB free
-            print("⚠️  Warning: Low GPU memory, applying aggressive optimizations")
+            logging.warning("⚠️  Warning: Low GPU memory, applying aggressive optimizations")
     
     latest_model = find_latest_model(model_type)
-    print(f"🔄 Loading model from: {latest_model}")
+    logging.info(f"🔄 Loading model from: {latest_model}")
     
     tokenizer = load_tokenizer(tokenizer_type, os.path.dirname(latest_model))
     device = get_device()
@@ -44,7 +45,7 @@ def load_model_and_tokenizer(tokenizer_type='subword', model_type='chat'):
     model = model.to(device)
     
     # Apply energy-efficient optimizations
-    from serving import quantize_model
+    from language_model.serving import quantize_model
     model = quantize_model(model, device)
     
     # Enable torch optimizations (disabled for MPS to prevent issues)
@@ -55,10 +56,10 @@ def load_model_and_tokenizer(tokenizer_type='subword', model_type='chat'):
     
     # Clean up checkpoint from memory
     del checkpoint
-    from serving import cleanup_memory
+    from language_model.serving import cleanup_memory
     cleanup_memory()
     
-    print("✅ Model loaded and optimized successfully")
+    logging.info("✅ Model loaded and optimized successfully")
     return model, tokenizer, device, latest_model
 
 def aggressive_cleanup():
@@ -71,7 +72,7 @@ def aggressive_cleanup():
         torch.mps.empty_cache()
         try:
             torch.mps.synchronize()
-        except:
+        except AttributeError:
             pass  # synchronize might not be available in all MPS versions
 
 def check_memory_usage():
@@ -186,7 +187,7 @@ if st.button('Generate'):
                 st.warning("⚠️ Skipping attention visualizations due to high memory usage")
             else:
                 try:
-                    from serving import (visualize_combined_input_attention, visualize_input_attention,
+                    from language_model.serving import (visualize_combined_input_attention, visualize_input_attention,
                                         visualize_combined_word_attention, visualize_word_to_word_attention)
                     
                     st.subheader('Attention Analysis')

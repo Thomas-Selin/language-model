@@ -1,7 +1,7 @@
 import torch
 import logging
-from src.language_model.subword_tokenizer import SubwordTokenizer
-from src.language_model.model import GPTLanguageModel
+from language_model.subword_tokenizer import SubwordTokenizer
+from language_model.model import GPTLanguageModel
 import os
 
 
@@ -32,7 +32,7 @@ def resize_model_checkpoint(
     
     if output_path is None:
         base_name = os.path.splitext(checkpoint_path)[0]
-        output_path = f"{base_name}_resized_vocab_{new_vocab_size}.pt"
+        output_path = f"{base_name}.pt"
     
     logging.info(f"Resizing checkpoint from vocab_size {old_vocab_size} to {new_vocab_size}")
     logging.info(f"Input: {checkpoint_path}")
@@ -224,7 +224,7 @@ def resize_checkpoint_for_actual_vocab(
 if __name__ == "__main__":
     # Example usage
     import sys
-    from src.language_model.config import VOCAB_PATH, TRAINING_START_TIME
+    from language_model.config import VOCAB_PATH
     
     if len(sys.argv) < 2:
         print("Usage: python checkpoint_resizer.py <checkpoint_path> [output_path]")

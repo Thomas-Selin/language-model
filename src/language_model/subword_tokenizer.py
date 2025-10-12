@@ -30,14 +30,15 @@ def create_bpe_tokenizer(text_files, vocab_size=MAX_VOCAB_SIZE):
     encoding = tokenizer.encode(test_sentence)
     ids = encoding.ids
     decoded = tokenizer.decode(ids)
-    print("Tokenizer round-trip test:")
-    print("Encoded IDs:", ids)
-    print("Decoded text:", repr(decoded))
+    logging.info("Tokenizer round-trip test:")
+    logging.info(f"Encoded IDs: {ids}")
+    logging.info(f"Decoded text: {repr(decoded)}")
     round_trip_ok = test_sentence == decoded.lstrip(" ")
-    print("Round-trip OK:", round_trip_ok)
+    logging.info(f"Round-trip OK: {round_trip_ok}")
     if not round_trip_ok:
-        print("\033[91mTokenizer round-trip check failed! Aborting training.\033[0m")
-        exit(1)  # or use: import sys; sys.exit(1)
+        logging.error("\033[91mTokenizer round-trip check failed! Aborting training.\033[0m")
+        import sys
+        sys.exit(1)
 
     return tokenizer
 

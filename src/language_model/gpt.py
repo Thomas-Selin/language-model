@@ -1,22 +1,22 @@
 import torch
-import datetime
 import time
 import os
 import logging
+
+from torch.nn.parallel.distributed import logger
 from language_model.subword_tokenizer import SubwordTokenizer
 from language_model.helpers import get_device, apply_runtime_overrides
 from language_model.model import GPTLanguageModel
 from language_model.train_utils import base_train_model, train_chat_alignment
-from language_model.config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, TRAINING_START_TIME, FINETUNING_MAX_EPOCHS, BLOCK_SIZE, RUNTIME_OVERRIDES_FILE
-from language_model.data_handler import prepare_context_data_for_training, process_qa_pairs_dataset
+from language_model.config import PARQUET_DIR_PATH, TEXT_COLUMN, VOCAB_PATH, QA_PARQUET_PATH, CONTEXT_PARQUET_PATH, LOG_LEVEL, FINETUNING_MAX_EPOCHS, BLOCK_SIZE, RUNTIME_OVERRIDES_FILE
+from language_model.qa_processing import prepare_context_data_for_training, process_qa_pairs_dataset
 from language_model.helpers import configure_colored_logging
 
 # Configure logging
 configure_colored_logging(LOG_LEVEL)
 
 if __name__ == "__main__":
-    training_start_time = TRAINING_START_TIME or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_dir = os.path.join('data', 'output', training_start_time)
+    output_dir = os.path.join('data', 'output')
     # Data paths
     parquet_dir_path = PARQUET_DIR_PATH
     text_column = TEXT_COLUMN
@@ -48,7 +48,8 @@ if __name__ == "__main__":
     else:
         checkpoint_path = None
     # Pass checkpoint_path to base_train_model (update base_train_model to accept this argument)
-    global_iter = base_train_model(parquet_dir_path, text_column, vocab_path, training_start_time, output_dir=output_dir, checkpoint_path=checkpoint_path)
+    # global_iter = base_train_model(parquet_dir_path, text_column, vocab_path, output_dir=output_dir, checkpoint_path=checkpoint_path)
+    global_iter = 8000
 
     # ==================== BASE TRAINING COMPLETION DIVIDER ====================
     logging.info("\n" + "="*80)
@@ -58,6 +59,7 @@ if __name__ == "__main__":
     logging.info("="*80 + "\n")
 
     # Now process QA dataset for fine-tuning
+    logger.info(f"Looking for vocabulary in path: {vocab_path}")
     tokenizer = SubwordTokenizer(vocab_file=vocab_path)
     vocab_size = tokenizer.get_vocab_size()
 
@@ -94,7 +96,7 @@ if __name__ == "__main__":
                     logging.info(f'Vocab size mismatch: checkpoint has {checkpoint_vocab_size}, need {vocab_size}')
                     logging.info('Resizing checkpoint to match actual vocabulary size...')
                     
-                    from scripts.checkpoint_resizer import resize_checkpoint_for_actual_vocab
+                    from language_model.scripts.checkpoint_resizer import resize_checkpoint_for_actual_vocab
                     resized_path = resize_checkpoint_for_actual_vocab(
                         checkpoint_path=model_path,
                         vocab_file=vocab_path,
