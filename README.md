@@ -3,7 +3,7 @@
 
 In this project I've built/trained a language model. This project was a part of the course "Deep Learning - Methods and applications" at Umeå University the year 2025, but it has been updated since then.
 
-The beginning of the project was based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Most of the original code have been modified and many additional features has been added.
+The beginning of the project was based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Most of the original code has been modified and many additional features have been added.
 
 ## Project report
 
@@ -17,7 +17,7 @@ The model architecture uses the decoder only transformer architecture. It is of 
 2. **Transformer Blocks**: Stacked layers of self-attention and feed-forward networks.
 3. **Output Layer**: Projects the final hidden states to the vocabulary size for token prediction.
 
-See the following diagram for a high-level overview of the architecture.
+**NOTE:** In `config.py` you should adjust parameters related to architecture, such as embeddings size and number of attention heads. As per default they are set extremely conservatively to easily enable running the whole training and inference process quickly and on limited hardware. See the following diagram for a high-level overview of one of these architectures.
 
 [Model architecture diagram](./images/model_architecture.png)
 
@@ -29,23 +29,23 @@ Pre-training/base-training were performed using three datasets, and fine-tuning 
 
 The base-trained model and fine-tuned/chat-aligned models created in the project are available on request (369 Mb each).
 
-## How to train and then run the model via the user interface
+## How to train and then use the model via the user interface
 
-**Requirements**: Python 3.11 (tested with 3.11.9), [uv](https://github.com/astral-sh/uv)
+**Requirements**: Python 3.11 (tested with 3.11.9), [uv package manager](https://github.com/astral-sh/uv)
 
-**GPU**: If a CUDA-capable GPU is available when training and running the model, it will be used. Otherwise, it will fallback to MPS acceleration and in last resort CPU.
+**GPU**: If a CUDA-capable GPU is available when training and running the model, it will be used. Otherwise, it will fallback to MPS (Apple) acceleration and in last resort CPU.
 
-**Note**: If you want to train on your own data, you'll need to replace the example training data for the base-training in the `data/input/parquet_files` folder. You should also replace the example question-answer dataset used for fine-tuning, place it here `data/input/chat-align/question_answer_dataset.parquet`. If you just want to start the UI and use the model files that I can provide on request, you can skip the training step by uncommenting `NO_TRAINING=true` at the top in `run_all.sh` and placing the model files in the `data/output/` folder.
+**Note**: To train a model on your own data, you'll need to replace the example training data for the base-training in the `data/input/parquet_files` folder. You should also replace the example question-answer dataset used for fine-tuning, place it here `data/input/chat-align/question_answer_dataset.parquet`. If you just want to start the UI and use the model files that I can provide on request, you can skip the training step by uncommenting `NO_TRAINING=true` at the top in `run_all.sh` and placing the model files in the `data/output/` folder.
 
 Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment:
 
 1. Set venv's python version and create venv: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
 2. Install dependencies: `uv sync`
-3. Either run `./run_all.sh` file to both create, train, export and serve the model via a web app in which you can inference/call the model. Alternatively, you can skip training and use and already created model, such as the example models, by runnung `NO_TRAINING=true ./run_all.sh`. 
+3. Either run `./run_all.sh` file to both create, train, export and serve the model via a web app in which you can inference/call the model. Alternatively, you can skip training and use and already created model, such as the example models, by running `NO_TRAINING=true ./run_all.sh`. 
 
 ### Monitoring the training process
 
-Run `tensorboard --logdir=.` in the `data/output/tensorboard_logs` to serve a UI for monitoring training
+Run `tensorboard --logdir=data/output/tensorboard_logs` to start the TensorBoard UI for monitoring training.
 
 ## Adjusting training parameters during training process
 
