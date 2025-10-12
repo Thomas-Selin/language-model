@@ -3,8 +3,6 @@
 Test script to verify memory optimizations are working
 """
 import os
-import sys
-sys.path.append('src')
 
 import torch
 from language_model.train_utils import optimize_memory_settings, aggressive_memory_cleanup

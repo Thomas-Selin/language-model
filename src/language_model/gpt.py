@@ -48,8 +48,7 @@ if __name__ == "__main__":
     else:
         checkpoint_path = None
     # Pass checkpoint_path to base_train_model (update base_train_model to accept this argument)
-    # global_iter = base_train_model(parquet_dir_path, text_column, vocab_path, output_dir=output_dir, checkpoint_path=checkpoint_path)
-    global_iter = 8000
+    global_iter = base_train_model(parquet_dir_path, text_column, vocab_path, output_dir=output_dir, checkpoint_path=checkpoint_path)
 
     # ==================== BASE TRAINING COMPLETION DIVIDER ====================
     logging.info("\n" + "="*80)
@@ -121,7 +120,6 @@ if __name__ == "__main__":
     
     # Fine-tune on QA pairs
     logging.info('\n=== Starting fine-tuning on QA pairs ===')
-    
     
     # Create a dummy optimizer to satisfy the apply_runtime_overrides function signature
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
