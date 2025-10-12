@@ -15,10 +15,10 @@ GLOBAL_ITER = 0
 BATCH_SIZE = 80  # Reduced from 128 if OOM persists
 GRADIENT_ACCUMULATION_STEPS = 8  # Effective batch = 80*8 = 640
 BLOCK_SIZE = 512
-BASE_TRAINING_MAX_EPOCHS = 20
-FINETUNING_MAX_EPOCHS = 4
+BASE_TRAINING_MAX_EPOCHS = 3  # Number of complete passes through each dataset file
+FINETUNING_MAX_EPOCHS = 4  # Number of complete passes through the QA dataset
 FINETUNE_EARLY_STOPPING_PATIENCE = 2
-EVAL_INTERVAL = 5
+EVAL_INTERVAL = 5  # Evaluate every N epochs
 LEARNING_RATE = 3e-4
 EVAL_ITERS = 100
 N_EMBD = 768

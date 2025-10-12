@@ -41,7 +41,7 @@ def test_optimized_loading():
     
     # Use fixtures directory for testing
     # __file__ is in tests/, so we just need to go to fixtures/
-    fixtures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
+    fixtures_dir = os.path.join('tests', 'fixtures')
     latest_model = os.path.join(fixtures_dir, 'best_model.pt')
     tokenizer = load_tokenizer('subword', fixtures_dir)
     device = get_device()

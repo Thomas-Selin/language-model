@@ -143,7 +143,6 @@ def base_train_model(
     
     # Training state
     global_iter = getattr(config, 'GLOBAL_ITER', 0)
-    total_epochs_run = 0
     tensorboard_logged = False
     
     # Runtime parameters
@@ -255,8 +254,6 @@ def base_train_model(
 
                 if 'global_iter' in extra_counters:
                     global_iter = extra_counters['global_iter']
-                if 'total_epochs_run' in extra_counters:
-                    total_epochs_run = extra_counters['total_epochs_run']
 
                 if not tensorboard_logged:
                     config_dict = {
@@ -298,10 +295,6 @@ def base_train_model(
                 if getattr(config, 'AUTO_DELETE_USED_FILES', False):
                     cleanup_processed_file(parquet_file)
 
-                if total_epochs_run >= runtime_params['base_training_max_epochs']:
-                    logging.info(f"Reached global epoch limit. Stopping training.")
-                    break
-
                 file_idx += 1
 
             user_interrupted, _ = wait_for_new_files_or_stop(parquet_dir_path, stop_file_path)
@@ -329,25 +322,39 @@ def _cleanup_memory():
 
 def _train_on_file(model, train_data, val_data, optimizer, scaler, writer, 
                   runtime_params, global_iter, output_dir):
-    """Train the model on a single file's data."""
+    """Train the model on a single file's data using proper epoch-based training.
+    
+    Each epoch iterates through the entire training dataset systematically,
+    ensuring the model sees all data.
+    """
+    from language_model.data_handler import get_sequential_batches
+    
     best_val_loss = float('inf')
     epochs_without_improvement = 0
-
+    
+    # Calculate total steps per epoch
+    max_start_idx = len(train_data) - runtime_params['block_size'] - 1
+    steps_per_epoch = (max_start_idx + runtime_params['batch_size'] - 1) // runtime_params['batch_size']
+    total_steps = runtime_params['base_training_max_epochs'] * steps_per_epoch
+    
     # Setup scheduler for this file
-    steps_per_file = runtime_params['base_training_max_epochs']
-    warmup_steps_local = max(1, int(0.02 * steps_per_file))
+    warmup_steps_local = max(1, int(0.02 * total_steps))
     scheduler = get_lr_scheduler(optimizer, warmup_steps_local,
-                               runtime_params['lr_decay'], steps_per_file)
+                               runtime_params['lr_decay'], total_steps)
+    
+    logging.info(f"Training setup: {runtime_params['base_training_max_epochs']} epochs, "
+                f"{steps_per_epoch} steps/epoch, {total_steps} total steps")
 
-    for iter in range(runtime_params['base_training_max_epochs']):
-        # Evaluation
-        if iter % runtime_params['eval_interval'] == 0 or iter == runtime_params['base_training_max_epochs'] - 1:
+    for epoch in range(runtime_params['base_training_max_epochs']):
+        # Evaluation at start of epoch and last epoch
+        if epoch % runtime_params['eval_interval'] == 0 or epoch == runtime_params['base_training_max_epochs'] - 1:
             log_memory_usage("before_eval", global_iter)
             
             losses = estimate_loss(model, train_data, val_data, config.EVAL_ITERS,
                                  runtime_params['block_size'], runtime_params['batch_size'], device)
 
-            logging.info(f"Step {iter}: train loss {losses['train']:.4f}, val loss 📉 {losses['val']:.4f}")
+            logging.info(f"Epoch {epoch}/{runtime_params['base_training_max_epochs']}: "
+                        f"train loss {losses['train']:.4f}, val loss 📉 {losses['val']:.4f}")
             log_memory_usage("after_eval", global_iter)
 
             # Save best model
@@ -361,7 +368,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
 
             # Early stopping check
             if epochs_without_improvement >= runtime_params['early_stopping_patience']:
-                logging.info(f"Early stopping triggered. Best val loss: {best_val_loss:.4f}")
+                logging.info(f"Early stopping triggered after {epoch} epochs. Best val loss: {best_val_loss:.4f}")
                 model.load_state_dict(torch.load(os.path.join(output_dir, "best_model.pt")))
                 break
 
@@ -372,7 +379,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
                 log_memory_usage("after_tensorboard", global_iter)
 
                 # Log samples and parameters periodically
-                if global_iter % (runtime_params['eval_interval'] * 25) == 0:
+                if epoch % (runtime_params['eval_interval'] * 5) == 0:
                     tokenizer = SubwordTokenizer(vocab_file=config.VOCAB_PATH)
                     log_generated_samples(model, tokenizer, writer, global_iter, device)
                     log_model_parameters(writer, model, global_iter)
@@ -381,50 +388,64 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
                 aggressive_memory_cleanup()
                 log_memory_usage("after_cleanup", global_iter)
 
-        # Training step with gradient accumulation
+        # Training epoch - iterate through entire dataset
         epoch_start_time = time.time()
+        epoch_loss = 0.0
+        num_batches = 0
         
         # Get gradient accumulation steps from config
         gradient_accumulation_steps = getattr(config, 'GRADIENT_ACCUMULATION_STEPS', 1)
-        effective_batch_size = runtime_params['batch_size'] * gradient_accumulation_steps
         
-        optimizer.zero_grad(set_to_none=True)
-        total_loss = 0.0
+        model.train()
         
-        for micro_step in range(gradient_accumulation_steps):
-            xb, yb = get_batch(runtime_params['block_size'], runtime_params['batch_size'],
-                              'train', train_data, val_data, device)
-
+        # Iterate through all data sequentially (with shuffling)
+        for xb, yb in get_sequential_batches(runtime_params['block_size'], 
+                                            runtime_params['batch_size'],
+                                            train_data, device, shuffle=True):
+            optimizer.zero_grad(set_to_none=True)
+            total_loss = 0.0
+            
+            # Note: We process one batch at a time here. If you want gradient accumulation
+            # with sequential batches, you'd need to batch multiple sequential batches together
             with autocast(device_type=device.type):
                 logits, loss = model(xb, yb)
-                # Scale loss by accumulation steps
-                loss = loss / gradient_accumulation_steps
 
             scaler.scale(loss).backward()
-            total_loss += loss.item() * gradient_accumulation_steps  # Unscale for logging
+            total_loss = loss.item()
             
             # Clean up intermediate tensors
             del xb, yb, logits
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            
+            # Gradient clipping and optimizer step
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=runtime_params['grad_clip_norm'])
+            scaler.step(optimizer)
+            scaler.update()
+            
+            scheduler.step()
+            
+            epoch_loss += total_loss
+            num_batches += 1
+            
+            if global_iter is not None:
+                global_iter += 1
+            
+            # Periodic cleanup
+            if num_batches % 10 == 0:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-        # Gradient clipping and optimizer step
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=runtime_params['grad_clip_norm'])
-        scaler.step(optimizer)
-        scaler.update()
-
-        scheduler.step()
-
-        # Log timing
+        # Log epoch timing and average loss
+        avg_epoch_loss = epoch_loss / max(num_batches, 1)
+        logging.info(f"Epoch {epoch} completed: avg loss {avg_epoch_loss:.4f}, "
+                    f"{num_batches} batches processed")
+        
         if global_iter is not None:
             epoch_duration = time.time() - epoch_start_time
             log_epoch_time(writer, epoch_duration, global_iter)
-            global_iter += 1
 
-        # Aggressive memory cleanup every few steps
-        if global_iter is not None and global_iter % 3 == 0:
-            aggressive_memory_cleanup()
+        # Aggressive memory cleanup between epochs
+        aggressive_memory_cleanup()
 
     return best_val_loss, global_iter
 

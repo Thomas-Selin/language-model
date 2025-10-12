@@ -282,7 +282,11 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
 
 
 def get_batch(block_size, batch_size, data_split, train_data, val_data, device):
-    # generate a small batch of data of inputs x and targets y
+    """Generate a random batch of data.
+    
+    For evaluation, we randomly sample batches. For training, use get_sequential_batches
+    to ensure the model sees all data.
+    """
     data = train_data if data_split == 'train' else val_data
     
     # Check if we have enough data for the requested block size
@@ -297,3 +301,51 @@ def get_batch(block_size, batch_size, data_split, train_data, val_data, device):
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     x, y = x.to(device), y.to(device)
     return x, y
+
+
+def get_sequential_batches(block_size, batch_size, data, device, shuffle=True):
+    """Generate sequential batches that cover all data systematically.
+    
+    This ensures the model sees all training data in each epoch.
+    
+    Args:
+        block_size: Context window size
+        batch_size: Number of sequences per batch
+        data: The dataset tensor
+        device: Device to place tensors on
+        shuffle: Whether to shuffle the data at the start of each epoch
+        
+    Yields:
+        Tuples of (input_batch, target_batch)
+    """
+    if len(data) <= block_size:
+        raise ValueError(
+            f"Insufficient data. Data length ({len(data)}) must be greater than "
+            f"block_size ({block_size})."
+        )
+    
+    # Calculate number of possible sequences
+    max_start_idx = len(data) - block_size - 1
+    
+    # Create all possible starting indices
+    indices = torch.arange(0, max_start_idx)
+    
+    if shuffle:
+        # Shuffle indices for better training
+        perm = torch.randperm(len(indices))
+        indices = indices[perm]
+    
+    # Yield batches
+    num_batches = (len(indices) + batch_size - 1) // batch_size
+    
+    for batch_idx in range(num_batches):
+        start = batch_idx * batch_size
+        end = min(start + batch_size, len(indices))
+        batch_indices = indices[start:end]
+        
+        # Create batch
+        x = torch.stack([data[i:i+block_size] for i in batch_indices])
+        y = torch.stack([data[i+1:i+block_size+1] for i in batch_indices])
+        x, y = x.to(device), y.to(device)
+        
+        yield x, y
