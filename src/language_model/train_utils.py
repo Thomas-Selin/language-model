@@ -345,7 +345,7 @@ def _train_on_file(model, train_data, val_data, optimizer, scaler, writer,
             log_memory_usage("before_eval", global_iter)
             
             losses = estimate_loss(model, train_data, val_data, config.EVAL_ITERS,
-                                 runtime_params['block_size'], runtime_params['batch_size'])
+                                 runtime_params['block_size'], runtime_params['batch_size'], device)
 
             logging.info(f"Step {iter}: train loss {losses['train']:.4f}, val loss 📉 {losses['val']:.4f}")
             log_memory_usage("after_eval", global_iter)

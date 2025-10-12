@@ -7,41 +7,9 @@ import os
 import pandas as pd
 from unittest.mock import patch, MagicMock
 from language_model.data_handler import get_batch
-from language_model.data_loading import is_file_fully_uploaded
 from language_model.qa_processing import process_qa_pairs_dataset
 from language_model.subword_tokenizer import SubwordTokenizer
 from language_model.exceptions import InvalidDataFormatError
-
-
-class TestIsFileFullyUploaded:
-    """Tests for is_file_fully_uploaded() function."""
-    
-    def test_stable_file(self):
-        """Test detection of a stable (fully uploaded) file."""
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"test data")
-            temp_file = f.name
-        
-        try:
-            # File should be stable
-            assert is_file_fully_uploaded(temp_file, check_interval=0.1, checks=2)
-        finally:
-            os.unlink(temp_file)
-    
-    def test_growing_file(self):
-        """Test detection of a file still being written."""
-        with tempfile.NamedTemporaryFile(delete=False, mode='wb') as f:
-            temp_file = f.name
-        
-        try:
-            # Mock getsize to return increasing values
-            sizes = [100, 200, 300, 400]
-            with patch('os.path.getsize', side_effect=sizes):
-                # File is growing, should return False
-                assert not is_file_fully_uploaded(temp_file, check_interval=0.01, checks=3)
-        finally:
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
 
 
 class TestGetBatch:

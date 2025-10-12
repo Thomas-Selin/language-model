@@ -60,7 +60,7 @@ def load_tokenizer(tokenizer_type, model_dir):
 
 # Add model quantization helper
 def quantize_model(model, device):
-    """Apply quantization for better energy efficiency"""
+    """Apply quantization for better efficiency"""
     if device.type == 'cuda':
         # Use half precision on GPU
         return model.half()

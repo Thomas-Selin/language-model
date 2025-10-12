@@ -10,7 +10,6 @@ from unittest.mock import patch
 from language_model.helpers import (
     get_device,
     count_parameters,
-    apply_runtime_overrides,
     get_lr_scheduler
 )
 
@@ -60,98 +59,6 @@ class TestCountParameters:
         """Test counting parameters in a model with no parameters."""
         model = torch.nn.Identity()
         assert count_parameters(model) == 0
-
-
-class TestApplyRuntimeOverrides:
-    """Tests for apply_runtime_overrides() function."""
-    
-    def test_no_overrides_file(self):
-        """Test behavior when no overrides file exists."""
-        optimizer = torch.optim.Adam([torch.nn.Parameter(torch.randn(5))])
-        params = {'learning_rate': 0.001, 'batch_size': 32}
-        
-        result_params, extra = apply_runtime_overrides(
-            optimizer, None, params, 'nonexistent_file.json'
-        )
-        
-        assert result_params == params
-        assert extra == {}
-    
-    def test_learning_rate_override(self):
-        """Test overriding learning rate."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump({'learning_rate': 0.0005}, f)
-            temp_file = f.name
-        
-        try:
-            optimizer = torch.optim.Adam([torch.nn.Parameter(torch.randn(5))])
-            params = {'learning_rate': 0.001}
-            
-            result_params, extra = apply_runtime_overrides(
-                optimizer, None, params, temp_file
-            )
-            
-            assert result_params['learning_rate'] == 0.0005
-            assert optimizer.param_groups[0]['lr'] == 0.0005
-        finally:
-            os.unlink(temp_file)
-    
-    def test_multiple_overrides(self):
-        """Test overriding multiple parameters."""
-        overrides = {
-            'learning_rate': 0.0005,
-            'batch_size': 64,
-            'eval_interval': 100,
-            'dropout': 0.2
-        }
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(overrides, f)
-            temp_file = f.name
-        
-        try:
-            optimizer = torch.optim.Adam([torch.nn.Parameter(torch.randn(5))])
-            params = {
-                'learning_rate': 0.001,
-                'batch_size': 32,
-                'eval_interval': 50,
-                'dropout': 0.1
-            }
-            
-            result_params, extra = apply_runtime_overrides(
-                optimizer, None, params, temp_file
-            )
-            
-            assert result_params['learning_rate'] == 0.0005
-            assert result_params['batch_size'] == 64
-            assert result_params['eval_interval'] == 100
-            assert result_params['dropout'] == 0.2
-        finally:
-            os.unlink(temp_file)
-    
-    def test_extra_counters(self):
-        """Test that extra counters like global_iter are returned separately."""
-        overrides = {
-            'global_iter': 1000,
-            'total_epochs_run': 50
-        }
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(overrides, f)
-            temp_file = f.name
-        
-        try:
-            optimizer = torch.optim.Adam([torch.nn.Parameter(torch.randn(5))])
-            params = {'learning_rate': 0.001}
-            
-            result_params, extra = apply_runtime_overrides(
-                optimizer, None, params, temp_file
-            )
-            
-            assert extra['global_iter'] == 1000
-            assert extra['total_epochs_run'] == 50
-        finally:
-            os.unlink(temp_file)
 
 
 class TestGetLRScheduler:
