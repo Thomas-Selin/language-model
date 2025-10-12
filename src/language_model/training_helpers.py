@@ -8,6 +8,7 @@ import logging
 import glob
 import threading
 from typing import Tuple, Optional
+import language_model.config as config
 from language_model.data_handler import load_and_process_data
 
 
