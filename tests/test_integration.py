@@ -10,11 +10,10 @@ import tempfile
 import os
 import shutil
 import pandas as pd
-from unittest.mock import patch
 from language_model.subword_tokenizer import SubwordTokenizer
 from language_model.model import GPTLanguageModel
-from language_model.data_handler import load_text_from_parquet, get_batch
-from language_model.helpers import get_device
+from language_model.data_handler import get_batch
+from language_model.data_loading import load_text_from_parquet
 
 
 @pytest.mark.integration
