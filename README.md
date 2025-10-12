@@ -25,6 +25,8 @@ The model architecture uses the decoder only transformer architecture. It is of 
 
 Pre-training/base-training were performed using three datasets, and fine-tuning was conducted with one additional dataset. For detailed information about the datasets and their usage, see the [Project report](#project-report).
 
+**NOTE:** The files in the `data/input/parquet_files` folder will be deleted after being used for training unless you set AUTO_DELETE_USED_FILES=False in `config.py`.
+
 ## Already trained models
 
 The base-trained model and fine-tuned/chat-aligned models created in the project are available on request (369 Mb each).
