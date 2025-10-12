@@ -259,15 +259,14 @@ def base_train_model(
                     config_dict = {
                         'batch_size': runtime_params['batch_size'],
                         'block_size': runtime_params['block_size'],
-                        'max_epochs': runtime_params['base_training_max_epochs'],
-                        'eval_interval': runtime_params['eval_interval'],
+                        'eval_step_interval': runtime_params['eval_step_interval'],
                         'learning_rate': runtime_params['learning_rate'],
                         'eval_iters': config.EVAL_ITERS,
                         'n_embd': config.N_EMBD,
                         'n_head': config.N_HEAD,
                         'n_layer': config.N_LAYER,
                         'dropout': runtime_params['dropout'],
-                        'early_stopping_patience': runtime_params['early_stopping_patience'],
+                        'early_stopping_patience_steps': runtime_params['early_stopping_patience_steps'],
                         'max_vocab_size': config.MAX_VOCAB_SIZE,
                         'device': device,
                         'vocab_path': vocab_path
@@ -281,6 +280,8 @@ def base_train_model(
                 warmup_steps_local = max(1, int(0.02 * steps_in_file))
                 scheduler = get_lr_scheduler(optimizer, warmup_steps_local, runtime_params['lr_decay'], steps_in_file)
 
+                # Reset patience counter for each file so all files are processed
+                steps_without_improvement = 0
                 file_best_val = float('inf')
                 file_steps = 0
                 model.train()
@@ -313,10 +314,10 @@ def base_train_model(
                             save_best_model(model, output_dir, "best_model.pt")
                         else:
                             steps_without_improvement += runtime_params['eval_step_interval']
-                        # Early stopping by steps
+                        # Early stopping by steps (now only affects current file)
                         if steps_without_improvement >= runtime_params['early_stopping_patience_steps']:
-                            logging.info(f"Early stopping triggered at step {global_iter}. Best global val loss: {best_val_loss_global:.4f}")
-                            raise StopIteration
+                            logging.info(f"Early stopping triggered for file {file_idx+1} at step {global_iter}. Best global val loss: {best_val_loss_global:.4f}")
+                            break
 
                     if file_steps >= steps_in_file:
                         break
