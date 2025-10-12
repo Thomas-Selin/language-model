@@ -39,7 +39,7 @@ The base-trained model and fine-tuned/chat-aligned models created in the project
 
 Use [uv](https://github.com/astral-sh/uv) to set up the virtual environment:
 
-1. Set venv's python version and create venv: `uv venv --python 3.11.9`. Then activate the venv with `source .venv/bin/activate`
+1. Set venv's python version and create venv: `uv venv --python 3.11`. Then activate the venv with `source .venv/bin/activate`
 2. Install dependencies: `uv sync`
 3. Either run `./run_all.sh` file to both create, train, export and serve the model via a web app in which you can inference/call the model. Alternatively, you can skip training and use and already created model, such as the example models, by running `NO_TRAINING=true ./run_all.sh`. 
 
@@ -91,7 +91,7 @@ PYTHONPATH=src pytest
 ```
 
 ## Original Project: nanogpt-lecture
-A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) 
+A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for that project can be found here: [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) 
 
 
 ## License
