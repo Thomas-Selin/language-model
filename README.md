@@ -29,7 +29,7 @@ Pre-training/base-training were performed using three datasets, and fine-tuning 
 
 The base-trained model and fine-tuned/chat-aligned models created in the project are available on request (369 Mb each).
 
-## How to train and run the model via the user interface
+## How to train and then run the model via the user interface
 
 **Requirements**: Python 3.11 (tested with 3.11.9), [uv](https://github.com/astral-sh/uv)
 
@@ -69,6 +69,12 @@ touch data/output/STOP_TRAINING
 
 The models will be saved in pytorch (`.pt`) format in the `data/output/` directory.
 The base trained model will be called `best_model.pt` and the chat aligned model will be called `chat_aligned_model.pt`.
+
+## Running tests
+To run the tests, use the command:
+```bash
+PYTHONPATH=src pytest
+```
 
 ## Original Project: nanogpt-lecture
 A project building a GPT which was created in the [Neural Networks: Zero To Hero](https://karpathy.ai/zero-to-hero.html) video lecture series. The code for the project can be found here: [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) 

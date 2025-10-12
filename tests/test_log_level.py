@@ -3,8 +3,6 @@
 Test script to demonstrate dynamic log level adjustment
 """
 
-import sys
-import os
 import logging
 
 from language_model.helpers import configure_colored_logging, update_log_level

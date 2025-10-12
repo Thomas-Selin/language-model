@@ -37,5 +37,8 @@ RUNTIME_OVERRIDES_FILE = "data/output/RUNTIME_OVERRIDES.json"
 MIN_FILE_SIZE_BYTES = 200 * 1024  # 200 KB
 STABLE_COUNT_THRESHOLD = 15
 
+# Whether to automatically delete parquet files after they've been used for base training.
+AUTO_DELETE_USED_FILES = False
+
 # Default weight decay
 DEFAULT_WEIGHT_DECAY = 0.01

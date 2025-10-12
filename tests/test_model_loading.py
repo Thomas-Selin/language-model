@@ -16,8 +16,7 @@ from language_model.serving import generate_text, find_latest_model, load_tokeni
 
 def check_model_exists():
     """Check if any trained model exists in tests/fixtures/"""
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    fixtures_dir = os.path.join(project_root, 'tests', 'fixtures')
+    fixtures_dir = os.path.join(os.path.dirname(__file__), 'fixtures')
     
     if not os.path.isdir(fixtures_dir):
         return False
@@ -33,7 +32,6 @@ def check_model_exists():
     return False
 
 
-@pytest.mark.skipif(not check_model_exists(), reason="No trained model found in tests/fixtures/")
 def test_optimized_loading():
     print("🧪 Testing optimized model loading...")
     
@@ -42,8 +40,8 @@ def test_optimized_loading():
     start_time = time.time()
     
     # Use fixtures directory for testing
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    fixtures_dir = os.path.join(project_root, 'tests', 'fixtures')
+    # __file__ is in tests/, so we just need to go to fixtures/
+    fixtures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
     latest_model = os.path.join(fixtures_dir, 'best_model.pt')
     tokenizer = load_tokenizer('subword', fixtures_dir)
     device = get_device()
@@ -56,19 +54,25 @@ def test_optimized_loading():
     original_n_embd = model_module.n_embd
     original_n_head = model_module.n_head
     original_n_layer = model_module.n_layer
+    original_block_size = model_module.block_size
     
     # Extract architecture from checkpoint
     vocab_size, n_embd = checkpoint['token_embedding_table.weight'].shape
+    block_size, _ = checkpoint['position_embedding_table.weight'].shape
     # Count layers by finding keys like 'blocks.0', 'blocks.1', etc.
     n_layer = max([int(k.split('.')[1]) for k in checkpoint.keys() if k.startswith('blocks.')]) + 1
-    # Count heads by finding unique head indices in blocks.0.sa.heads.X (X is at index 4)
-    heads = set([int(k.split('.')[4]) for k in checkpoint.keys() if k.startswith('blocks.0.sa.heads.') and len(k.split('.')) > 5])
+    # Count heads by finding unique head indices in blocks.0.self_attention.heads.X
+    # Keys look like: 'blocks.0.self_attention.heads.0.key.weight'
+    # Split: ['blocks', '0', 'self_attention', 'heads', '0', 'key', 'weight']
+    # We want index 4 (the head number)
+    heads = set([int(k.split('.')[4]) for k in checkpoint.keys() if k.startswith('blocks.0.self_attention.heads.') and len(k.split('.')) > 5])
     n_head = max(heads) + 1 if heads else 1
     
     # Temporarily override config for this test
     model_module.n_embd = n_embd
     model_module.n_head = n_head  
     model_module.n_layer = n_layer
+    model_module.block_size = block_size
     
     try:
         # Use vocab size from checkpoint, not tokenizer (fixtures may have mismatched files)
@@ -83,7 +87,7 @@ def test_optimized_loading():
         
         load_time = time.time() - start_time
         print(f"✅ Model loaded in {load_time:.2f} seconds")
-        print(f"   Model architecture: n_embd={n_embd}, n_head={n_head}, n_layer={n_layer}")
+        print(f"   Model architecture: n_embd={n_embd}, n_head={n_head}, n_layer={n_layer}, block_size={block_size}")
         
         # Test multiple generations with pre-loaded model
         prompts = [
@@ -127,79 +131,8 @@ def test_optimized_loading():
         model_module.n_embd = original_n_embd
         model_module.n_head = original_n_head
         model_module.n_layer = original_n_layer
+        model_module.block_size = original_block_size
 
-
-@pytest.mark.skipif(not check_model_exists(), reason="No trained model found in tests/fixtures/")
-def test_old_way():
-    print("\n🐌 Testing old way (reloading model each time):")
-    
-    # Use fixtures directory for testing
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    fixtures_dir = os.path.join(project_root, 'tests', 'fixtures')
-    model_path = os.path.join(fixtures_dir, 'best_model.pt')
-    
-    # Load checkpoint once to get architecture params
-    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-    vocab_size, n_embd = checkpoint['token_embedding_table.weight'].shape
-    n_layer = max([int(k.split('.')[1]) for k in checkpoint.keys() if k.startswith('blocks.')]) + 1
-    heads = set([int(k.split('.')[4]) for k in checkpoint.keys() if k.startswith('blocks.0.sa.heads.') and len(k.split('.')) > 5])
-    n_head = max(heads) + 1 if heads else 1
-    del checkpoint
-    
-    # Setup config overrides
-    import language_model.model as model_module
-    original_n_embd = model_module.n_embd
-    original_n_head = model_module.n_head
-    original_n_layer = model_module.n_layer
-    model_module.n_embd = n_embd
-    model_module.n_head = n_head
-    model_module.n_layer = n_layer
-    
-    try:
-        prompts = [
-            "Once upon a time",
-            "The quick brown fox"
-        ]
-        
-        total_time = 0
-        for i, prompt in enumerate(prompts, 1):
-            print(f"\n   Generation {i}: '{prompt}'")
-            start_time = time.time()
-            
-            # Reload model each time to simulate old behavior
-            tokenizer = load_tokenizer('subword', fixtures_dir)
-            device = get_device()
-            model = GPTLanguageModel(vocab_size=vocab_size)
-            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-            model.load_state_dict(checkpoint)
-            model = model.to(device)
-            model = quantize_model(model, device)
-            model.eval()
-            del checkpoint
-            
-            result, _, _ = generate_text(
-                prompt=prompt,
-                max_new_tokens=50,
-                temperature=0.8,
-                model=model,
-                tokenizer=tokenizer,
-                device=device
-            )
-            
-            gen_time = time.time() - start_time
-            total_time += gen_time
-            
-            print(f"   Generated in {gen_time:.2f}s: {result[:100]}...")
-        
-        print(f"\n📊 Old way summary:")
-        print(f"   Total time: {total_time:.2f}s")
-        print(f"   Average per generation: {total_time/len(prompts):.2f}s")
-    
-    finally:
-        # Restore original config values
-        model_module.n_embd = original_n_embd
-        model_module.n_head = original_n_head
-        model_module.n_layer = original_n_layer
 
 if __name__ == "__main__":
     print("🚀 Model Loading Performance Test")
@@ -207,7 +140,6 @@ if __name__ == "__main__":
     
     try:
         test_optimized_loading()
-        test_old_way()
         
         print("\n" + "=" * 50)
         print("🎉 All tests completed!")

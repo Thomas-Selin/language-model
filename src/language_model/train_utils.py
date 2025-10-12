@@ -295,7 +295,8 @@ def base_train_model(
                 logging.info(f"\033[92m⏰ TOTAL DURATION: {file_duration:.2f} seconds ({file_duration/60:.2f} min)\033[0m")
                 logging.info("="*80 + "\n")
 
-                cleanup_processed_file(parquet_file)
+                if getattr(config, 'AUTO_DELETE_USED_FILES', False):
+                    cleanup_processed_file(parquet_file)
 
                 if total_epochs_run >= runtime_params['base_training_max_epochs']:
                     logging.info(f"Reached global epoch limit. Stopping training.")
