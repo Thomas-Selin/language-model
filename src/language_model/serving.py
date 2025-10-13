@@ -603,7 +603,7 @@ def generate_text(prompt, max_new_tokens=50, temperature=0.8, tokenizer_type='su
             try:
                 output, all_attentions = model.generate(
                     input_ids,
-                    # max_new_tokens=max_new_tokens,
+                    max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     return_attention=True,
                     # eos_token_id=eos_token_id,
