@@ -133,14 +133,14 @@ if show_memory_status:
         else:
             st.metric("GPU Memory", "Not available")
 
-user_input = st.text_area('Enter your prompt:', height=100)
+user_input = st.text_area('Enter your prompt:', 'How are you?', height=100)
 
 # Limit max tokens to prevent OOM
 max_tokens = st.slider('Max new tokens', 1, 100, 5, help="Lower values reduce memory usage")
 temperature = st.slider('Temperature', 0.01, 1.0, 0.8, 0.05)
 
 # Option to show attention visualizations (with warning)
-show_attention = st.checkbox('Show attention visualizations (⚠️ Uses more memory)', value=False)
+show_attention = st.checkbox('Show attention visualizations (⚠️ Uses more memory)', value=True)
 
 if show_attention:
     st.warning("⚠️ Attention visualizations use significant memory. Disable if you are experiencing crashes.")
