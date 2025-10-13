@@ -13,30 +13,21 @@ def find_latest_model(model_type="chat"):
     model_files = []
     # Get the project root directory (two levels up from this file)
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    output_dirs = glob.glob(os.path.join(project_root, 'data', 'output', '*'))
+    output_dir = os.path.join(project_root, 'data', 'output')
     
-    for output_dir in output_dirs:
-        if os.path.isdir(output_dir):
-            if model_type == "chat":
-                model_file = os.path.join(output_dir, 'chat_aligned_model.pt')
-            else:  # pre-trained
-                model_file = os.path.join(output_dir, 'best_model.pt')
-            
-            if os.path.exists(model_file):
-                model_files.append(model_file)
+    if model_type == "chat":
+        model_files = glob.glob(os.path.join(output_dir, 'chat_aligned_model.pt'))
+    else:  # pre-trained
+        model_files = glob.glob(os.path.join(output_dir, 'best_model.pt'))
     
     # If no chat model found, try to fall back to pre-trained model
     if not model_files and model_type == "chat":
         logging.warning("⚠️  No chat_aligned_model.pt found, falling back to best_model.pt")
-        for output_dir in output_dirs:
-            if os.path.isdir(output_dir):
-                model_file = os.path.join(output_dir, 'best_model.pt')
-                if os.path.exists(model_file):
-                    model_files.append(model_file)
+        model_files = glob.glob(os.path.join(output_dir, 'best_model.pt'))
     
     if not model_files:
         model_name = "chat_aligned_model.pt" if model_type == "chat" else "best_model.pt"
-        raise FileNotFoundError(f"No {model_name} files found in data/output/")
+        raise FileNotFoundError(f"No {model_name} files found in {output_dir}")
     
     # Sort files by modification time (most recent first)
     latest_file = max(model_files, key=os.path.getmtime)

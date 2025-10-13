@@ -136,7 +136,7 @@ if show_memory_status:
 user_input = st.text_area('Enter your prompt:', height=100)
 
 # Limit max tokens to prevent OOM
-max_tokens = st.slider('Max new tokens', 1, 100, 50, help="Lower values reduce memory usage")
+max_tokens = st.slider('Max new tokens', 1, 100, 5, help="Lower values reduce memory usage")
 temperature = st.slider('Temperature', 0.01, 1.0, 0.8, 0.05)
 
 # Option to show attention visualizations (with warning)
@@ -193,19 +193,9 @@ if st.button('Generate'):
                     st.subheader('Attention Analysis')
                     
                     # Create tabs for different types of analysis
-                    tab1, tab2 = st.tabs(["🎯 Input Focus", "🔗 Word Relationships"])
+                    tab1, tab2 = st.tabs(["🔗 Word Relationships", "🎯 Input Focus"])
                     
                     with tab1:
-                        st.info("📊 Shows what parts of your input prompt the model focused on")
-                        
-                        # Show combined input attention
-                        combined_input_fig = visualize_combined_input_attention(user_input, result, all_attentions, tokenizer_obj, aggregation='mean')
-                        if combined_input_fig:
-                            st.pyplot(combined_input_fig)
-                            del combined_input_fig
-                            aggressive_cleanup()
-                    
-                    with tab2:
                         st.info("🔗 Shows which words refer to or relate to other words (e.g., 'it' → 'bear' in the sentence \"The bear ate the cake because it was hungry\")")
                         
                         # Show word-to-word attention
@@ -226,6 +216,17 @@ if st.button('Generate'):
                                 aggressive_cleanup()
                         else:
                             st.info("Skipped layer-specific visualization to conserve memory")
+
+                    with tab2:
+                        st.info("📊 Shows what parts of your input prompt the model focused on")
+                        
+                        # Show combined input attention
+                        combined_input_fig = visualize_combined_input_attention(user_input, result, all_attentions, tokenizer_obj, aggregation='mean')
+                        if combined_input_fig:
+                            st.pyplot(combined_input_fig)
+                            del combined_input_fig
+                            aggressive_cleanup()
+
                         
                 except Exception as e:
                     st.error(f"❌ Error generating visualizations: {e}")
