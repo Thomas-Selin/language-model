@@ -5,6 +5,8 @@ In this project I've built/trained a language model. This project was a part of 
 
 The beginning of the project was based on [nanogpt-lecture](https://github.com/karpathy/ng-video-lecture) by Andrej Karpathy, which is licensed under MIT license. See [Original Project: nanogpt-lecture](#original-project-nanogpt-lecture) below. Most of the original code has been modified and many additional features have been added.
 
+### ***Developed by Thomas Selin***
+
 ## Project report
 
 [**Project report - Deep learning, Methods and applications 2025 - Thomas Selin.pdf**](./Project%20report%20-%20Deep%20learning%2C%20Methods%20and%20applications%202025%20-%20Thomas%20Selin.pdf)
