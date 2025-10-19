@@ -166,7 +166,8 @@ def load_and_process_data(vocab_size, parquet_dir_path, text_column='text', voca
         if skipped_files:
             logging.info(f"Skipped files in batch {first_batch_idx+1}: {skipped_files}")
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         print_memory_usage()
         logging.info("Converting tokens to tensor...")
         data = torch.cat(chunk_tensors)
@@ -248,7 +249,8 @@ def load_next_batch(batch_files, parquet_dir_path, text_column, tokenizer, train
         return train_data, val_data
     logging.info("Converting tokens to tensor...")
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     print_memory_usage()  # Print memory usage before tensor conversion
     data = torch.cat(chunk_tensors)
     del chunk_tensors  # Free memory

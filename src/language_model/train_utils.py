@@ -51,17 +51,26 @@ def optimize_memory_settings() -> None:
     - Sets GPU memory fraction to prevent OOM
     - Enables cudNN benchmarking for speed
     """
-    # Enable memory-efficient attention if available
-    if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
-        torch.backends.cuda.enable_flash_sdp(True)
-    
-    # Set memory fraction to leave some headroom
+    cuda_backend = getattr(torch.backends, "cuda", None)
+    if cuda_backend is not None and hasattr(cuda_backend, "enable_flash_sdp"):
+        try:
+            cuda_backend.enable_flash_sdp(True)
+        except Exception as exc:
+            logging.debug(f"Skipping flash SDP optimisation: {exc}")
+
     if torch.cuda.is_available():
-        torch.cuda.set_per_process_memory_fraction(GPU_MEMORY_FRACTION)
-        logging.info(f"Set GPU memory fraction to {GPU_MEMORY_FRACTION:.1%}")
-    
-    # Enable cudNN benchmark for consistent input sizes
-    torch.backends.cudnn.benchmark = True
+        try:
+            torch.cuda.set_per_process_memory_fraction(GPU_MEMORY_FRACTION)
+            logging.info(f"Set GPU memory fraction to {GPU_MEMORY_FRACTION:.1%}")
+        except Exception as exc:
+            logging.debug(f"Could not set CUDA memory fraction: {exc}")
+
+    cudnn_backend = getattr(torch.backends, "cudnn", None)
+    if cudnn_backend is not None and hasattr(cudnn_backend, "benchmark"):
+        try:
+            cudnn_backend.benchmark = True
+        except Exception as exc:
+            logging.debug(f"Could not enable cudNN benchmark: {exc}")
     
     logging.info("Memory optimization settings applied")
 

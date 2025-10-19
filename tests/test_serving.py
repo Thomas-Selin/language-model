@@ -39,19 +39,19 @@ class TestServing(unittest.TestCase):
     @patch('language_model.serving.glob.glob')
     def test_find_latest_model(self, mock_glob):
         """Test that find_latest_model returns a valid model path."""
-        # Mock the glob to return a fake output directory
-        mock_glob.return_value = ['tests/fixtures/']
-        
+        # Mock the glob to return a fake model file path
+        mock_glob.return_value = ['tests/fixtures/best_model.pt']
+
         # Mock os.path.isdir, os.path.exists, and os.path.getmtime
         with patch('language_model.serving.os.path.isdir', return_value=True):
             with patch('language_model.serving.os.path.exists', return_value=True):
                 with patch('language_model.serving.os.path.getmtime', return_value=1234567890.0):
                     model_path = find_latest_model()
-                    
+
                     # Assert model path is returned
                     self.assertIsNotNone(model_path, "Model path should not be None")
                     self.assertIsInstance(model_path, str, "Model path should be a string")
-                    
+
                     # Assert it's a .pt file
                     self.assertTrue(model_path.endswith('.pt'), "Model file should have .pt extension")
     
